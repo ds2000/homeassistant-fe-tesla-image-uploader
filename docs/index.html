@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tesla Card Image Uploader</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1 class="header-title">Tesla Card Image Uploader</h1>
+            <p class="header-sub">Contribute car images to the <a href="https://github.com/ds2000/homeassistant-fe-tesla" target="_blank" rel="noopener">homeassistant-fe-tesla</a> card</p>
+        </header>
+
+        <nav class="stepper" aria-label="Progress">
+            <ol class="stepper-list">
+                <li class="stepper-step active" data-step="1">
+                    <span class="stepper-number">1</span>
+                    <span class="stepper-label">Select</span>
+                </li>
+                <li class="stepper-divider"></li>
+                <li class="stepper-step" data-step="2">
+                    <span class="stepper-number">2</span>
+                    <span class="stepper-label">Verify</span>
+                </li>
+                <li class="stepper-divider"></li>
+                <li class="stepper-step" data-step="3">
+                    <span class="stepper-number">3</span>
+                    <span class="stepper-label">Upload</span>
+                </li>
+            </ol>
+        </nav>
+
+        <!-- Step 1: Select combination -->
+        <section id="step-1" class="step">
+            <h2 class="step-title">Select your Tesla</h2>
+            <p class="step-desc">Choose the model, year range, and colour you want to contribute images for.</p>
+
+            <div class="form-group">
+                <label for="select-model" class="form-label">Model</label>
+                <select id="select-model" class="form-select" disabled>
+                    <option value="">Loading...</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="select-year" class="form-label">Year range</label>
+                <select id="select-year" class="form-select" disabled>
+                    <option value="">Select a model first</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="select-colour" class="form-label">Colour</label>
+                <select id="select-colour" class="form-select" disabled>
+                    <option value="">Select a year range first</option>
+                </select>
+            </div>
+
+            <div id="colour-status-msg" class="status-msg" hidden></div>
+
+            <button id="btn-to-step2" class="btn btn-primary" disabled>Continue</button>
+        </section>
+
+        <!-- Step 2: Email verification -->
+        <section id="step-2" class="step" hidden>
+            <h2 class="step-title">Verify your email</h2>
+            <p class="step-desc">We'll send a verification link to confirm your submission for
+                <strong id="verify-combo-label"></strong>.</p>
+
+            <div id="verify-form">
+                <div class="form-group">
+                    <label for="input-email" class="form-label">Email address</label>
+                    <input id="input-email" type="email" class="form-input" placeholder="you@example.com" required>
+                </div>
+                <button id="btn-send-verify" class="btn btn-primary" disabled>Send verification email</button>
+            </div>
+
+            <div id="verify-sent" hidden>
+                <div class="notice notice-info">
+                    <p><strong>Check your inbox.</strong></p>
+                    <p>We sent a verification link to <strong id="verify-sent-email"></strong>. Click the link in the email to continue.</p>
+                    <p class="notice-small">Didn't receive it? Check your spam folder or <button id="btn-resend" class="btn-link">send again</button>.</p>
+                </div>
+            </div>
+
+            <button id="btn-back-to-step1" class="btn btn-secondary">Back</button>
+            <button id="btn-dev-skip" class="btn btn-dev">Skip verification (dev)</button>
+        </section>
+
+        <!-- Step 3: Upload images -->
+        <section id="step-3" class="step" hidden>
+            <h2 class="step-title">Upload screenshots</h2>
+            <p class="step-desc">Take 15 screenshots from the Tesla app for
+                <strong id="upload-combo-label"></strong> — 8 unplugged and 7 on charge.</p>
+
+            <div class="notice notice-info upload-tips">
+                <p><strong>Before you start:</strong></p>
+                <ul>
+                    <li>Wait for <strong>all animations to finish</strong> before taking each screenshot &mdash; doors, trunk, and frunk must be completely still</li>
+                    <li>Turn <strong>climate control OFF</strong> before the climate screenshot &mdash; seat heater icons will interfere with processing</li>
+                    <li>Use your phone's built-in screenshot function (not a camera photo)</li>
+                </ul>
+            </div>
+
+            <div class="upload-counter" id="upload-counter">0 of 15 screenshots uploaded</div>
+
+            <div class="upload-wizard" id="upload-wizard">
+                <nav class="upload-sidebar" id="upload-sidebar">
+                    <ol class="upload-sidebar-list" id="upload-sidebar-list"></ol>
+                </nav>
+
+                <div class="upload-main">
+                    <div class="upload-guide" id="upload-guide"></div>
+                    <div class="upload-instructions" id="upload-instructions"></div>
+                    <div class="upload-dropzone-area" id="upload-dropzone-area"></div>
+                    <div class="upload-nav">
+                        <button class="btn btn-secondary upload-nav-btn" id="btn-upload-prev" type="button">Back</button>
+                        <span class="upload-nav-indicator" id="upload-nav-indicator">1 / 15</span>
+                        <button class="btn btn-primary upload-nav-btn" id="btn-upload-next" type="button">Next</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="upload-error" class="error-text" hidden></div>
+
+            <button id="btn-submit-upload" class="btn btn-primary" disabled>Submit images</button>
+
+            <div id="upload-progress" class="upload-progress" hidden>
+                <div class="upload-progress-text" id="upload-progress-text">Preparing...</div>
+                <div class="upload-progress-track">
+                    <div class="upload-progress-fill" id="upload-progress-bar"></div>
+                </div>
+            </div>
+
+            <div id="upload-success" class="notice notice-success" hidden>
+                <p><strong>Images submitted!</strong></p>
+                <p>Your submission has been uploaded. A pull request will be created automatically once the processing workflow runs.</p>
+                <p><a id="upload-success-link" href="#" target="_blank" rel="noopener">View submission branch on GitHub</a></p>
+            </div>
+
+            <button id="btn-back-to-step1-from3" class="btn btn-secondary">Start over</button>
+        </section>
+
+        <footer class="footer">
+            <p>Open source &middot; <a href="https://github.com/ds2000/homeassistant-fe-tesla-image-uploader" target="_blank" rel="noopener">GitHub</a></p>
+        </footer>
+    </div>
+
+    <script src="submit.js"></script>
+</body>
+</html>

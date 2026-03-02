@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Local Claude settings
+.claude/settings.local.json
+
+# Raw screenshots (large, not for repo)
+screenshots/
+
+# OS files
+.DS_Store
+Thumbs.db

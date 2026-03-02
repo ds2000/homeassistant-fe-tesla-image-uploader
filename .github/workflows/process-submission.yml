@@ -1,0 +1,269 @@
+# Process submission: validate, align, desaturate, preview, open PR
+# Triggered on push to submissions/* branches
+name: Process Submission
+
+on:
+  push:
+    branches:
+      - 'submissions/*'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GH_BOT_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_BOT_TOKEN }}
+          fetch-depth: 0
+
+      - name: Detect submission directory
+        id: detect
+        run: |
+          # Find the submission directory (there should be exactly one under submissions/)
+          SUBMISSION_DIR=$(find submissions/ -mindepth 1 -maxdepth 1 -type d | head -n1)
+          if [ -z "$SUBMISSION_DIR" ]; then
+            echo "::error::No submission directory found under submissions/"
+            exit 1
+          fi
+          echo "submission_dir=$SUBMISSION_DIR" >> "$GITHUB_OUTPUT"
+          echo "Found submission directory: $SUBMISSION_DIR"
+
+          # Extract directory name (e.g. model3-2017-2024-pearl_white_multi_coat)
+          DIR_NAME=$(basename "$SUBMISSION_DIR")
+          echo "dir_name=$DIR_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Parse model, year, and colour from submission
+        id: parse
+        run: |
+          DIR_NAME="${{ steps.detect.outputs.dir_name }}"
+
+          # Read all model keys and year keys from status.json to do unambiguous parsing
+          # Strategy: try each model key as a prefix, then each year key for that model,
+          # and the remainder (minus trailing -token) is the colour
+          FOUND=false
+
+          for MODEL in $(jq -r '.models | keys[]' status.json); do
+            # Check if dir name starts with this model
+            if [[ "$DIR_NAME" == "${MODEL}-"* ]]; then
+              REMAINDER="${DIR_NAME#${MODEL}-}"
+
+              for YEAR in $(jq -r --arg m "$MODEL" '.models[$m].years | keys[]' status.json); do
+                if [[ "$REMAINDER" == "${YEAR}-"* ]]; then
+                  COLOUR_AND_TOKEN="${REMAINDER#${YEAR}-}"
+                  # Colour is everything except the last -XXXX (4-char hex token)
+                  COLOUR=$(echo "$COLOUR_AND_TOKEN" | sed 's/-[0-9a-f]\{4\}$//')
+
+                  # Verify this colour exists in status.json
+                  if jq -e --arg m "$MODEL" --arg y "$YEAR" --arg c "$COLOUR" \
+                    '.models[$m].years[$y].colours[$c]' status.json > /dev/null 2>&1; then
+                    echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+                    echo "year=$YEAR" >> "$GITHUB_OUTPUT"
+                    echo "colour=$COLOUR" >> "$GITHUB_OUTPUT"
+                    echo "Parsed: model=$MODEL year=$YEAR colour=$COLOUR"
+                    FOUND=true
+                    break 2
+                  fi
+                fi
+              done
+            fi
+          done
+
+          if [ "$FOUND" != "true" ]; then
+            echo "::error::Could not parse model/year/colour from directory name: $DIR_NAME"
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: pip install opencv-python-headless numpy
+
+      - name: Run validation
+        id: validate
+        run: |
+          python scripts/validate_submission.py \
+            --submission-dir "${{ steps.detect.outputs.submission_dir }}" \
+            > validation_report.json 2>&1 || true
+
+          # Check if validation passed
+          if jq -e '.all_pass' validation_report.json > /dev/null 2>&1; then
+            echo "validation_passed=true" >> "$GITHUB_OUTPUT"
+            echo "Validation passed"
+          else
+            echo "validation_passed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Validation failed — see report"
+          fi
+
+          # Store report for PR body
+          cat validation_report.json
+
+      - name: Run alignment
+        id: align
+        continue-on-error: true
+        run: |
+          LINE_COUNT=$(wc -l < scripts/align_images.py)
+          if [ "$LINE_COUNT" -le 5 ]; then
+            echo "::notice::align_images.py is a stub ($LINE_COUNT lines) — skipping"
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+          else
+            python scripts/align_images.py \
+              --submission-dir "${{ steps.detect.outputs.submission_dir }}" \
+              --reference-dir reference/model3/ \
+              --output-dir aligned/ \
+              --confidence-report alignment_report.json
+            echo "skipped=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run desaturation
+        id: desaturate
+        continue-on-error: true
+        run: |
+          LINE_COUNT=$(wc -l < scripts/desaturate_body.py)
+          if [ "$LINE_COUNT" -le 5 ]; then
+            echo "::notice::desaturate_body.py is a stub ($LINE_COUNT lines) — skipping"
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+          else
+            python scripts/desaturate_body.py \
+              --input-dir "${{ steps.detect.outputs.submission_dir }}" \
+              --output-dir desaturated/
+            echo "skipped=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Generate preview
+        id: preview
+        continue-on-error: true
+        run: |
+          LINE_COUNT=$(wc -l < scripts/generate_preview.py)
+          if [ "$LINE_COUNT" -le 5 ]; then
+            echo "::notice::generate_preview.py is a stub ($LINE_COUNT lines) — skipping"
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+          else
+            python scripts/generate_preview.py \
+              --input-dir "${{ steps.detect.outputs.submission_dir }}" \
+              --output preview.png
+            echo "skipped=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Read display labels
+        id: labels
+        run: |
+          MODEL="${{ steps.parse.outputs.model }}"
+          YEAR="${{ steps.parse.outputs.year }}"
+          COLOUR="${{ steps.parse.outputs.colour }}"
+
+          MODEL_LABEL=$(jq -r --arg m "$MODEL" '.models[$m].label' status.json)
+          YEAR_LABEL=$(jq -r --arg m "$MODEL" --arg y "$YEAR" '.models[$m].years[$y].label' status.json)
+          COLOUR_LABEL=$(echo "$COLOUR" | sed 's/_/ /g; s/\b\(.\)/\u\1/g')
+
+          echo "model_label=$MODEL_LABEL" >> "$GITHUB_OUTPUT"
+          echo "year_label=$YEAR_LABEL" >> "$GITHUB_OUTPUT"
+          echo "colour_label=$COLOUR_LABEL" >> "$GITHUB_OUTPUT"
+
+      - name: Build PR body
+        id: pr_body
+        run: |
+          MODEL_LABEL="${{ steps.labels.outputs.model_label }}"
+          YEAR_LABEL="${{ steps.labels.outputs.year_label }}"
+          COLOUR_LABEL="${{ steps.labels.outputs.colour_label }}"
+          VALIDATION_PASSED="${{ steps.validate.outputs.validation_passed }}"
+
+          # Build validation summary from report
+          PASSED=$(jq -r '.passed' validation_report.json 2>/dev/null || echo "?")
+          TOTAL=$(jq -r '.required_count' validation_report.json 2>/dev/null || echo "?")
+          FAILED_FILES=""
+          if [ "$VALIDATION_PASSED" != "true" ]; then
+            FAILED_FILES=$(jq -r '.files[] | select(.error != null) | "- **\(.file)**: \(.error)"' validation_report.json 2>/dev/null || echo "")
+          fi
+
+          # Alignment status
+          ALIGN_STATUS="Skipped (script not yet implemented)"
+          if [ "${{ steps.align.outputs.skipped }}" = "false" ]; then
+            if [ "${{ steps.align.outcome }}" = "success" ]; then
+              ALIGN_STATUS="Completed"
+            else
+              ALIGN_STATUS="Failed (see logs)"
+            fi
+          fi
+
+          # Write PR body to file using heredoc
+          cat > pr_body.md <<PREOF
+          ## Submission: ${MODEL_LABEL} ${YEAR_LABEL} — ${COLOUR_LABEL}
+
+          ### Validation
+          $(if [ "$VALIDATION_PASSED" = "true" ]; then
+            echo "All ${TOTAL} required files passed validation."
+          else
+            echo "**${PASSED}/${TOTAL} files passed.** The following issues were found:"
+            echo ""
+            echo "$FAILED_FILES"
+          fi)
+
+          ### Processing Pipeline
+          | Step | Status |
+          |---|---|
+          | Validation | $([ "$VALIDATION_PASSED" = "true" ] && echo "Passed" || echo "**Failed**") |
+          | Alignment | ${ALIGN_STATUS} |
+          | Desaturation | $([ "${{ steps.desaturate.outputs.skipped }}" = "true" ] && echo "Skipped (stub)" || echo "${{ steps.desaturate.outcome }}") |
+          | Preview | $([ "${{ steps.preview.outputs.skipped }}" = "true" ] && echo "Skipped (stub)" || echo "${{ steps.preview.outcome }}") |
+          PREOF
+
+          # Remove leading whitespace from heredoc
+          sed -i 's/^          //' pr_body.md
+
+      - name: Create Pull Request
+        id: create_pr
+        run: |
+          MODEL_LABEL="${{ steps.labels.outputs.model_label }}"
+          YEAR_LABEL="${{ steps.labels.outputs.year_label }}"
+          COLOUR_LABEL="${{ steps.labels.outputs.colour_label }}"
+          VALIDATION_PASSED="${{ steps.validate.outputs.validation_passed }}"
+
+          if [ "$VALIDATION_PASSED" = "true" ]; then
+            TITLE="submission: ${MODEL_LABEL} ${YEAR_LABEL} — ${COLOUR_LABEL}"
+          else
+            TITLE="[needs fixes] submission: ${MODEL_LABEL} ${YEAR_LABEL} — ${COLOUR_LABEL}"
+          fi
+
+          PR_URL=$(gh pr create \
+            --title "$TITLE" \
+            --body-file pr_body.md \
+            --base main \
+            --head "${{ github.ref_name }}")
+
+          PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
+          echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+          echo "Created PR #${PR_NUMBER}: ${PR_URL}"
+
+      - name: Update status.json to pending
+        run: |
+          MODEL="${{ steps.parse.outputs.model }}"
+          YEAR="${{ steps.parse.outputs.year }}"
+          COLOUR="${{ steps.parse.outputs.colour }}"
+          PR_NUMBER="${{ steps.create_pr.outputs.pr_number }}"
+
+          # Checkout main to update status.json
+          git checkout main
+
+          # Update status.json using jq
+          jq --arg m "$MODEL" --arg y "$YEAR" --arg c "$COLOUR" --argjson pr "$PR_NUMBER" \
+            '.models[$m].years[$y].colours[$c] = {"status": "pending", "pr": $pr}' \
+            status.json > status_updated.json
+          mv status_updated.json status.json
+
+          # Commit and push
+          git add status.json
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "status: mark ${MODEL} ${YEAR} ${COLOUR} as pending (PR #${PR_NUMBER})"
+          git push origin main

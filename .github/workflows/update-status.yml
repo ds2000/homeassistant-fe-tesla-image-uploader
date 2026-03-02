@@ -1,0 +1,105 @@
+# Update status.json when PRs are merged or closed
+name: Update Status
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    if: startsWith(github.head_ref, 'submissions/')
+    env:
+      GH_TOKEN: ${{ secrets.GH_BOT_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GH_BOT_TOKEN }}
+
+      - name: Parse branch name
+        id: parse
+        run: |
+          BRANCH="${{ github.head_ref }}"
+          # Strip submissions/ prefix
+          DIR_NAME="${BRANCH#submissions/}"
+          echo "Parsing branch: $BRANCH (dir_name: $DIR_NAME)"
+
+          # Match model and year against status.json keys (same strategy as process-submission)
+          FOUND=false
+
+          for MODEL in $(jq -r '.models | keys[]' status.json); do
+            if [[ "$DIR_NAME" == "${MODEL}-"* ]]; then
+              REMAINDER="${DIR_NAME#${MODEL}-}"
+
+              for YEAR in $(jq -r --arg m "$MODEL" '.models[$m].years | keys[]' status.json); do
+                if [[ "$REMAINDER" == "${YEAR}-"* ]]; then
+                  COLOUR_AND_TOKEN="${REMAINDER#${YEAR}-}"
+                  # Colour is everything except the last -XXXX (4-char hex token)
+                  COLOUR=$(echo "$COLOUR_AND_TOKEN" | sed 's/-[0-9a-f]\{4\}$//')
+
+                  # Verify this colour exists in status.json
+                  if jq -e --arg m "$MODEL" --arg y "$YEAR" --arg c "$COLOUR" \
+                    '.models[$m].years[$y].colours[$c]' status.json > /dev/null 2>&1; then
+                    echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+                    echo "year=$YEAR" >> "$GITHUB_OUTPUT"
+                    echo "colour=$COLOUR" >> "$GITHUB_OUTPUT"
+                    echo "Parsed: model=$MODEL year=$YEAR colour=$COLOUR"
+                    FOUND=true
+                    break 2
+                  fi
+                fi
+              done
+            fi
+          done
+
+          if [ "$FOUND" != "true" ]; then
+            echo "::warning::Could not parse model/year/colour from branch: $BRANCH"
+            exit 1
+          fi
+
+      - name: Update status.json
+        run: |
+          MODEL="${{ steps.parse.outputs.model }}"
+          YEAR="${{ steps.parse.outputs.year }}"
+          COLOUR="${{ steps.parse.outputs.colour }}"
+          MERGED="${{ github.event.pull_request.merged }}"
+
+          if [ "$MERGED" = "true" ]; then
+            echo "PR merged — setting status to complete"
+            jq --arg m "$MODEL" --arg y "$YEAR" --arg c "$COLOUR" \
+              '.models[$m].years[$y].colours[$c] = {"status": "complete", "pr": null}' \
+              status.json > status_updated.json
+            STATUS_WORD="complete"
+          else
+            echo "PR closed without merge — setting status to available"
+            jq --arg m "$MODEL" --arg y "$YEAR" --arg c "$COLOUR" \
+              '.models[$m].years[$y].colours[$c] = {"status": "available", "pr": null}' \
+              status.json > status_updated.json
+            STATUS_WORD="available"
+          fi
+
+          mv status_updated.json status.json
+
+      - name: Commit and push
+        run: |
+          MODEL="${{ steps.parse.outputs.model }}"
+          YEAR="${{ steps.parse.outputs.year }}"
+          COLOUR="${{ steps.parse.outputs.colour }}"
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+
+          git add status.json
+          git diff --cached --quiet && echo "No changes to status.json — skipping commit" && exit 0
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          MERGED="${{ github.event.pull_request.merged }}"
+          if [ "$MERGED" = "true" ]; then
+            MSG="status: mark ${MODEL} ${YEAR} ${COLOUR} as complete (PR #${PR_NUMBER} merged)"
+          else
+            MSG="status: mark ${MODEL} ${YEAR} ${COLOUR} as available (PR #${PR_NUMBER} closed)"
+          fi
+
+          git commit -m "$MSG"
+          git push origin main

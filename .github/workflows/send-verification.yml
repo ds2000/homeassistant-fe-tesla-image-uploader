@@ -1,0 +1,185 @@
+# Send email verification via Resend API
+# Triggered by workflow_dispatch from the GitHub Pages app
+name: Send Verification
+
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: 'Contributor email address'
+        required: true
+      token_hash:
+        description: 'HMAC token hash (uuid:hex-signature)'
+        required: true
+      model:
+        description: 'Tesla model key'
+        required: true
+      year_range:
+        description: 'Year range key'
+        required: true
+      colour:
+        description: 'Colour key'
+        required: true
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs
+        run: |
+          # Validate token_hash format: uuid:64-char-hex-signature
+          TOKEN_HASH="${{ github.event.inputs.token_hash }}"
+          if ! echo "$TOKEN_HASH" | grep -qE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[0-9a-f]{64}$'; then
+            echo "::error::Invalid token_hash format"
+            exit 1
+          fi
+
+          # Validate email (basic check)
+          EMAIL="${{ github.event.inputs.email }}"
+          if ! echo "$EMAIL" | grep -qE '^[^@]+@[^@]+\.[^@]+$'; then
+            echo "::error::Invalid email format"
+            exit 1
+          fi
+
+          # Validate model exists in status.json
+          MODEL="${{ github.event.inputs.model }}"
+          if ! jq -e --arg m "$MODEL" '.models[$m]' status.json > /dev/null 2>&1; then
+            echo "::error::Unknown model: $MODEL"
+            exit 1
+          fi
+
+          # Validate year_range exists for this model
+          YEAR="${{ github.event.inputs.year_range }}"
+          if ! jq -e --arg m "$MODEL" --arg y "$YEAR" '.models[$m].years[$y]' status.json > /dev/null 2>&1; then
+            echo "::error::Unknown year range: $YEAR for model $MODEL"
+            exit 1
+          fi
+
+          # Validate colour exists for this model/year
+          COLOUR="${{ github.event.inputs.colour }}"
+          if ! jq -e --arg m "$MODEL" --arg y "$YEAR" --arg c "$COLOUR" \
+            '.models[$m].years[$y].colours[$c]' status.json > /dev/null 2>&1; then
+            echo "::error::Unknown colour: $COLOUR for $MODEL $YEAR"
+            exit 1
+          fi
+
+      - name: Build verification URL and send email
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: |
+          TOKEN_HASH="${{ github.event.inputs.token_hash }}"
+          TOKEN="${TOKEN_HASH%%:*}"
+          SIG="${TOKEN_HASH#*:}"
+
+          MODEL="${{ github.event.inputs.model }}"
+          YEAR="${{ github.event.inputs.year_range }}"
+          COLOUR="${{ github.event.inputs.colour }}"
+          EMAIL="${{ github.event.inputs.email }}"
+
+          # Read display labels from status.json
+          MODEL_LABEL=$(jq -r --arg m "$MODEL" '.models[$m].label' status.json)
+          YEAR_LABEL=$(jq -r --arg m "$MODEL" --arg y "$YEAR" '.models[$m].years[$y].label' status.json)
+          # Format colour: replace underscores with spaces, title case
+          COLOUR_LABEL=$(echo "$COLOUR" | sed 's/_/ /g; s/\b\(.\)/\u\1/g')
+
+          VERIFY_URL="https://ds2000.github.io/homeassistant-fe-tesla-image-uploader/?token=${TOKEN}&sig=${SIG}&model=${MODEL}&year=${YEAR}&colour=${COLOUR}"
+
+          # Build HTML email body
+          HTML_BODY=$(cat <<'EMAILEOF'
+          <!DOCTYPE html>
+          <html>
+          <head><meta charset="utf-8"></head>
+          <body style="margin:0;padding:0;background-color:#0d0d0d;font-family:'Gotham','Century Gothic','Segoe UI',system-ui,sans-serif;">
+            <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#0d0d0d;padding:40px 20px;">
+              <tr>
+                <td align="center">
+                  <table width="600" cellpadding="0" cellspacing="0" style="background-color:#181818;border-radius:12px;overflow:hidden;">
+                    <!-- Header -->
+                    <tr>
+                      <td style="padding:32px 32px 16px;text-align:center;">
+                        <h1 style="margin:0;color:#ffffff;font-size:22px;font-weight:600;">Tesla Card Image Uploader</h1>
+                      </td>
+                    </tr>
+                    <!-- Body -->
+                    <tr>
+                      <td style="padding:0 32px 24px;">
+                        <p style="color:#b0b0b0;font-size:15px;line-height:1.6;margin:0 0 20px;">
+                          You requested to upload images for:
+                        </p>
+                        <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#222222;border-radius:8px;margin-bottom:24px;">
+                          <tr>
+                            <td style="padding:16px 20px;">
+                              <p style="margin:0;color:#ffffff;font-size:16px;font-weight:600;">
+                                __MODEL_LABEL__ __YEAR_LABEL__
+                              </p>
+                              <p style="margin:4px 0 0;color:#e82127;font-size:15px;font-weight:500;">
+                                __COLOUR_LABEL__
+                              </p>
+                            </td>
+                          </tr>
+                        </table>
+                        <table width="100%" cellpadding="0" cellspacing="0">
+                          <tr>
+                            <td align="center" style="padding-bottom:20px;">
+                              <a href="__VERIFY_URL__"
+                                 style="display:inline-block;background-color:#e82127;color:#ffffff;text-decoration:none;font-size:16px;font-weight:600;padding:14px 36px;border-radius:8px;">
+                                Verify &amp; Continue
+                              </a>
+                            </td>
+                          </tr>
+                        </table>
+                        <p style="color:#666666;font-size:13px;line-height:1.5;margin:0;">
+                          If the button doesn't work, copy and paste this URL into your browser:
+                        </p>
+                        <p style="color:#888888;font-size:12px;line-height:1.5;margin:8px 0 0;word-break:break-all;">
+                          __VERIFY_URL__
+                        </p>
+                      </td>
+                    </tr>
+                    <!-- Footer -->
+                    <tr>
+                      <td style="padding:16px 32px 24px;border-top:1px solid #2a2a2a;">
+                        <p style="color:#555555;font-size:12px;line-height:1.5;margin:0;text-align:center;">
+                          If you didn't request this, you can safely ignore this email.
+                        </p>
+                      </td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
+          </body>
+          </html>
+          EMAILEOF
+          )
+
+          # Replace placeholders in HTML
+          HTML_BODY="${HTML_BODY//__MODEL_LABEL__/$MODEL_LABEL}"
+          HTML_BODY="${HTML_BODY//__YEAR_LABEL__/$YEAR_LABEL}"
+          HTML_BODY="${HTML_BODY//__COLOUR_LABEL__/$COLOUR_LABEL}"
+          HTML_BODY="${HTML_BODY//__VERIFY_URL__/$VERIFY_URL}"
+
+          # Send via Resend API
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://api.resend.com/emails \
+            -H "Authorization: Bearer $RESEND_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg from "Tesla Card Uploader <onboarding@resend.dev>" \
+              --arg to "$EMAIL" \
+              --arg subject "Verify your Tesla card image submission" \
+              --arg html "$HTML_BODY" \
+              '{from: $from, to: [$to], subject: $subject, html: $html}')")
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          echo "Resend API response (HTTP $HTTP_CODE): $BODY"
+
+          if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
+            echo "::error::Resend API returned HTTP $HTTP_CODE"
+            exit 1
+          fi
+
+          echo "Verification email sent to $EMAIL"
