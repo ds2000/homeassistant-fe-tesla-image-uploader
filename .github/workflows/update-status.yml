@@ -25,8 +25,9 @@ jobs:
 
       - name: Parse branch name
         id: parse
+        env:
+          BRANCH: ${{ github.head_ref }}
         run: |
-          BRANCH="${{ github.head_ref }}"
           # Strip submissions/ prefix
           DIR_NAME="${BRANCH#submissions/}"
           echo "Parsing branch: $BRANCH (dir_name: $DIR_NAME)"
@@ -66,11 +67,12 @@ jobs:
           fi
 
       - name: Update status.json
+        env:
+          MODEL: ${{ steps.parse.outputs.model }}
+          VARIANT: ${{ steps.parse.outputs.variant }}
+          COLOUR: ${{ steps.parse.outputs.colour }}
+          MERGED: ${{ github.event.pull_request.merged }}
         run: |
-          MODEL="${{ steps.parse.outputs.model }}"
-          VARIANT="${{ steps.parse.outputs.variant }}"
-          COLOUR="${{ steps.parse.outputs.colour }}"
-          MERGED="${{ github.event.pull_request.merged }}"
           STATUS_KEY="${MODEL}/${VARIANT}/${COLOUR}"
 
           if [ "$MERGED" = "true" ]; then
@@ -88,11 +90,13 @@ jobs:
           mv status_updated.json status.json
 
       - name: Commit and push
+        env:
+          MODEL: ${{ steps.parse.outputs.model }}
+          VARIANT: ${{ steps.parse.outputs.variant }}
+          COLOUR: ${{ steps.parse.outputs.colour }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          MERGED: ${{ github.event.pull_request.merged }}
         run: |
-          MODEL="${{ steps.parse.outputs.model }}"
-          VARIANT="${{ steps.parse.outputs.variant }}"
-          COLOUR="${{ steps.parse.outputs.colour }}"
-          PR_NUMBER="${{ github.event.pull_request.number }}"
           STATUS_KEY="${MODEL}/${VARIANT}/${COLOUR}"
 
           git add status.json
@@ -101,7 +105,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          MERGED="${{ github.event.pull_request.merged }}"
           if [ "$MERGED" = "true" ]; then
             MSG="status: mark ${STATUS_KEY} as complete (PR #${PR_NUMBER} merged)"
           else

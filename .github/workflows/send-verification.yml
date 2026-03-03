@@ -34,23 +34,26 @@ jobs:
           echo "Fetched models.json"
 
       - name: Validate inputs
+        env:
+          TOKEN_HASH: ${{ github.event.inputs.token_hash }}
+          EMAIL: ${{ github.event.inputs.email }}
+          MODEL: ${{ github.event.inputs.model }}
+          VARIANT: ${{ github.event.inputs.variant }}
+          COLOUR: ${{ github.event.inputs.colour }}
         run: |
           # Validate token_hash format: uuid:64-char-hex-signature
-          TOKEN_HASH="${{ github.event.inputs.token_hash }}"
           if ! echo "$TOKEN_HASH" | grep -qE '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:[0-9a-f]{64}$'; then
             echo "::error::Invalid token_hash format"
             exit 1
           fi
 
           # Validate email (basic check)
-          EMAIL="${{ github.event.inputs.email }}"
           if ! echo "$EMAIL" | grep -qE '^[^@]+@[^@]+\.[^@]+$'; then
             echo "::error::Invalid email format"
             exit 1
           fi
 
           # Validate model exists in models.json
-          MODEL="${{ github.event.inputs.model }}"
           if ! jq -e --arg m "$MODEL" \
             '.models[] | select(.id == $m)' models.json > /dev/null 2>&1; then
             echo "::error::Unknown model: $MODEL"
@@ -58,7 +61,6 @@ jobs:
           fi
 
           # Validate variant exists for this model
-          VARIANT="${{ github.event.inputs.variant }}"
           if ! jq -e --arg m "$MODEL" --arg v "$VARIANT" \
             '.models[] | select(.id == $m) | .variants[] | select(.id == $v)' \
             models.json > /dev/null 2>&1; then
@@ -67,7 +69,6 @@ jobs:
           fi
 
           # Validate colour exists for this model/variant
-          COLOUR="${{ github.event.inputs.colour }}"
           if ! jq -e --arg m "$MODEL" --arg v "$VARIANT" --arg c "$COLOUR" \
             '.models[] | select(.id == $m) | .variants[] | select(.id == $v) | .colours[] | select(.id == $c)' \
             models.json > /dev/null 2>&1; then
@@ -78,15 +79,14 @@ jobs:
       - name: Build verification URL and send email
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          TOKEN_HASH: ${{ github.event.inputs.token_hash }}
+          EMAIL: ${{ github.event.inputs.email }}
+          MODEL: ${{ github.event.inputs.model }}
+          VARIANT: ${{ github.event.inputs.variant }}
+          COLOUR: ${{ github.event.inputs.colour }}
         run: |
-          TOKEN_HASH="${{ github.event.inputs.token_hash }}"
           TOKEN="${TOKEN_HASH%%:*}"
           SIG="${TOKEN_HASH#*:}"
-
-          MODEL="${{ github.event.inputs.model }}"
-          VARIANT="${{ github.event.inputs.variant }}"
-          COLOUR="${{ github.event.inputs.colour }}"
-          EMAIL="${{ github.event.inputs.email }}"
 
           # Read display labels from models.json
           MODEL_LABEL=$(jq -r --arg m "$MODEL" \

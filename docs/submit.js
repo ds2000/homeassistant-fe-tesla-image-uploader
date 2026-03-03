@@ -4,15 +4,19 @@
 (function () {
     'use strict';
 
-    // ── Config ──────────────────────────────────────────────────────────
+var WORKER_API = 'https://tesla-image-uploader-api.david-c22.workers.dev';
 
-    var GITHUB_PAT = 'YOUR_GITHUB_PAT_HERE'; // actions:write only — safe to commit
-    var GITHUB_UPLOAD_PAT = 'YOUR_GITHUB_UPLOAD_PAT_HERE'; // contents:write scope
-    var REPO = 'ds2000/homeassistant-fe-tesla-image-uploader';
-    var CARD_REPO = 'ds2000/homeassistant-fe-tesla';
-    var MODELS_URL = 'https://raw.githubusercontent.com/' + CARD_REPO + '/main/models.json';
-    var WORKFLOW_FILE = 'send-verification.yml';
-    var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
+var REPO = 'ds2000/homeassistant-fe-tesla-image-uploader';
+var CARD_REPO = 'ds2000/homeassistant-fe-tesla';
+
+var MODELS_URL =
+    'https://raw.githubusercontent.com/' +
+    CARD_REPO +
+    '/main/models.json';
+
+var WORKFLOW_FILE = 'send-verification.yml';
+
+var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
 
     // ── Screenshot layers ─────────────────────────────────────────────
     // Two groups: unplugged (off-charge) then on-charge (plugged in).
@@ -421,28 +425,19 @@
 
                 var tokenHash = verificationToken + ':' + sig;
 
-                return fetch(
-                    'https://api.github.com/repos/' + REPO + '/actions/workflows/' + WORKFLOW_FILE + '/dispatches',
-                    {
-                        method: 'POST',
-                        headers: {
-                            'Authorization': 'Bearer ' + GITHUB_PAT,
-                            'Accept': 'application/vnd.github+json',
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            ref: 'main',
-                            inputs: {
-                                email: email,
-                                token_hash: tokenHash,
-                                model: selection.model,
-                                variant: selection.variant,
-                                colour: selection.colour
-                            }
-                        })
-                    }
-                );
-            })
+return fetch(WORKER_API + '/dispatch', {
+    method: 'POST',
+    headers: {
+        'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+        email: email,
+        token_hash: tokenHash,
+        model: selection.model,
+        variant: selection.variant,
+        colour: selection.colour
+    })
+});
             .then(function (resp) {
                 if (!resp.ok) throw new Error('GitHub API returned ' + resp.status);
 
@@ -1006,28 +1001,29 @@
 
     // ── Upload: GitHub API helpers ───────────────────────────────────────
 
-    function ghApi(method, path, body) {
-        var opts = {
+function ghApi(method, path, body) {
+    return fetch(WORKER_API + '/github', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
             method: method,
-            headers: {
-                'Authorization': 'Bearer ' + GITHUB_UPLOAD_PAT,
-                'Accept': 'application/vnd.github+json'
-            }
-        };
-        if (body) {
-            opts.headers['Content-Type'] = 'application/json';
-            opts.body = JSON.stringify(body);
+            path: path,
+            body: body
+        })
+    }).then(function (resp) {
+        if (!resp.ok) {
+            return resp.text().then(function (text) {
+                throw new Error('API error: ' + text);
+            });
         }
-        return fetch('https://api.github.com' + path, opts).then(function (resp) {
-            if (!resp.ok) {
-                return resp.text().then(function (text) {
-                    throw new Error('GitHub API ' + resp.status + ': ' + text);
-                });
-            }
-            if (resp.status === 204) return null;
-            return resp.json();
-        });
-    }
+
+        if (resp.status === 204) return null;
+
+        return resp.json();
+    });
+}
 
     function fileToBase64(file) {
         return new Promise(function (resolve, reject) {

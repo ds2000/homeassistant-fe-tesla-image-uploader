@@ -46,9 +46,9 @@ jobs:
 
       - name: Parse model, variant, and colour from submission
         id: parse
+        env:
+          DIR_NAME: ${{ steps.detect.outputs.dir_name }}
         run: |
-          DIR_NAME="${{ steps.detect.outputs.dir_name }}"
-
           # Parse using models.json: try each model ID as prefix, then each variant ID
           FOUND=false
 
@@ -93,9 +93,11 @@ jobs:
 
       - name: Run validation
         id: validate
+        env:
+          SUBMISSION_DIR: ${{ steps.detect.outputs.submission_dir }}
         run: |
           python scripts/validate_submission.py \
-            --submission-dir "${{ steps.detect.outputs.submission_dir }}" \
+            --submission-dir "$SUBMISSION_DIR" \
             > validation_report.json 2>&1 || true
 
           # Check if validation passed
@@ -112,9 +114,11 @@ jobs:
 
       - name: Process screenshots (offcharge)
         if: steps.validate.outputs.validation_passed == 'true'
+        env:
+          SUBMISSION_DIR: ${{ steps.detect.outputs.submission_dir }}
         run: |
           python scripts/process_screenshots.py \
-            --input-dir "${{ steps.detect.outputs.submission_dir }}" \
+            --input-dir "$SUBMISSION_DIR" \
             --output-dir processed/offcharge/ \
             --mode offcharge \
             --generate-overlays \
@@ -122,9 +126,11 @@ jobs:
 
       - name: Process screenshots (oncharge)
         if: steps.validate.outputs.validation_passed == 'true'
+        env:
+          SUBMISSION_DIR: ${{ steps.detect.outputs.submission_dir }}
         run: |
           python scripts/process_screenshots.py \
-            --input-dir "${{ steps.detect.outputs.submission_dir }}" \
+            --input-dir "$SUBMISSION_DIR" \
             --output-dir processed/oncharge/ \
             --mode oncharge \
             --generate-overlays \
@@ -133,6 +139,8 @@ jobs:
       - name: Run alignment
         id: align
         continue-on-error: true
+        env:
+          SUBMISSION_DIR: ${{ steps.detect.outputs.submission_dir }}
         run: |
           LINE_COUNT=$(wc -l < scripts/align_images.py)
           if [ "$LINE_COUNT" -le 5 ]; then
@@ -140,7 +148,7 @@ jobs:
             echo "skipped=true" >> "$GITHUB_OUTPUT"
           else
             python scripts/align_images.py \
-              --submission-dir "${{ steps.detect.outputs.submission_dir }}" \
+              --submission-dir "$SUBMISSION_DIR" \
               --reference-dir reference/model3/ \
               --output-dir aligned/ \
               --confidence-report alignment_report.json
@@ -150,6 +158,8 @@ jobs:
       - name: Run desaturation
         id: desaturate
         continue-on-error: true
+        env:
+          SUBMISSION_DIR: ${{ steps.detect.outputs.submission_dir }}
         run: |
           LINE_COUNT=$(wc -l < scripts/desaturate_body.py)
           if [ "$LINE_COUNT" -le 5 ]; then
@@ -157,7 +167,7 @@ jobs:
             echo "skipped=true" >> "$GITHUB_OUTPUT"
           else
             python scripts/desaturate_body.py \
-              --input-dir "${{ steps.detect.outputs.submission_dir }}" \
+              --input-dir "$SUBMISSION_DIR" \
               --output-dir desaturated/
             echo "skipped=false" >> "$GITHUB_OUTPUT"
           fi
@@ -165,6 +175,8 @@ jobs:
       - name: Generate preview
         id: preview
         continue-on-error: true
+        env:
+          SUBMISSION_DIR: ${{ steps.detect.outputs.submission_dir }}
         run: |
           LINE_COUNT=$(wc -l < scripts/generate_preview.py)
           if [ "$LINE_COUNT" -le 5 ]; then
@@ -172,18 +184,18 @@ jobs:
             echo "skipped=true" >> "$GITHUB_OUTPUT"
           else
             python scripts/generate_preview.py \
-              --input-dir "${{ steps.detect.outputs.submission_dir }}" \
+              --input-dir "$SUBMISSION_DIR" \
               --output preview.png
             echo "skipped=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Read display labels from models.json
         id: labels
+        env:
+          MODEL: ${{ steps.parse.outputs.model }}
+          VARIANT: ${{ steps.parse.outputs.variant }}
+          COLOUR: ${{ steps.parse.outputs.colour }}
         run: |
-          MODEL="${{ steps.parse.outputs.model }}"
-          VARIANT="${{ steps.parse.outputs.variant }}"
-          COLOUR="${{ steps.parse.outputs.colour }}"
-
           MODEL_LABEL=$(jq -r --arg m "$MODEL" \
             '.models[] | select(.id == $m) | .name' models.json)
           VARIANT_LABEL=$(jq -r --arg m "$MODEL" --arg v "$VARIANT" \
@@ -197,12 +209,18 @@ jobs:
 
       - name: Build PR body
         id: pr_body
+        env:
+          MODEL_LABEL: ${{ steps.labels.outputs.model_label }}
+          VARIANT_LABEL: ${{ steps.labels.outputs.variant_label }}
+          COLOUR_LABEL: ${{ steps.labels.outputs.colour_label }}
+          VALIDATION_PASSED: ${{ steps.validate.outputs.validation_passed }}
+          ALIGN_SKIPPED: ${{ steps.align.outputs.skipped }}
+          ALIGN_OUTCOME: ${{ steps.align.outcome }}
+          DESAT_SKIPPED: ${{ steps.desaturate.outputs.skipped }}
+          DESAT_OUTCOME: ${{ steps.desaturate.outcome }}
+          PREVIEW_SKIPPED: ${{ steps.preview.outputs.skipped }}
+          PREVIEW_OUTCOME: ${{ steps.preview.outcome }}
         run: |
-          MODEL_LABEL="${{ steps.labels.outputs.model_label }}"
-          VARIANT_LABEL="${{ steps.labels.outputs.variant_label }}"
-          COLOUR_LABEL="${{ steps.labels.outputs.colour_label }}"
-          VALIDATION_PASSED="${{ steps.validate.outputs.validation_passed }}"
-
           # Build validation summary from report
           PASSED=$(jq -r '.passed' validation_report.json 2>/dev/null || echo "?")
           TOTAL=$(jq -r '.required_count' validation_report.json 2>/dev/null || echo "?")
@@ -213,8 +231,8 @@ jobs:
 
           # Alignment status
           ALIGN_STATUS="Skipped (script not yet implemented)"
-          if [ "${{ steps.align.outputs.skipped }}" = "false" ]; then
-            if [ "${{ steps.align.outcome }}" = "success" ]; then
+          if [ "$ALIGN_SKIPPED" = "false" ]; then
+            if [ "$ALIGN_OUTCOME" = "success" ]; then
               ALIGN_STATUS="Completed"
             else
               ALIGN_STATUS="Failed (see logs)"
@@ -239,8 +257,8 @@ jobs:
           |---|---|
           | Validation | $([ "$VALIDATION_PASSED" = "true" ] && echo "Passed" || echo "**Failed**") |
           | Alignment | ${ALIGN_STATUS} |
-          | Desaturation | $([ "${{ steps.desaturate.outputs.skipped }}" = "true" ] && echo "Skipped (stub)" || echo "${{ steps.desaturate.outcome }}") |
-          | Preview | $([ "${{ steps.preview.outputs.skipped }}" = "true" ] && echo "Skipped (stub)" || echo "${{ steps.preview.outcome }}") |
+          | Desaturation | $([ "$DESAT_SKIPPED" = "true" ] && echo "Skipped (stub)" || echo "$DESAT_OUTCOME") |
+          | Preview | $([ "$PREVIEW_SKIPPED" = "true" ] && echo "Skipped (stub)" || echo "$PREVIEW_OUTCOME") |
           PREOF
 
           # Remove leading whitespace from heredoc
@@ -248,12 +266,13 @@ jobs:
 
       - name: Create Pull Request
         id: create_pr
+        env:
+          MODEL_LABEL: ${{ steps.labels.outputs.model_label }}
+          VARIANT_LABEL: ${{ steps.labels.outputs.variant_label }}
+          COLOUR_LABEL: ${{ steps.labels.outputs.colour_label }}
+          VALIDATION_PASSED: ${{ steps.validate.outputs.validation_passed }}
+          HEAD_REF: ${{ github.ref_name }}
         run: |
-          MODEL_LABEL="${{ steps.labels.outputs.model_label }}"
-          VARIANT_LABEL="${{ steps.labels.outputs.variant_label }}"
-          COLOUR_LABEL="${{ steps.labels.outputs.colour_label }}"
-          VALIDATION_PASSED="${{ steps.validate.outputs.validation_passed }}"
-
           if [ "$VALIDATION_PASSED" = "true" ]; then
             TITLE="submission: ${MODEL_LABEL} ${VARIANT_LABEL} — ${COLOUR_LABEL}"
           else
@@ -264,7 +283,7 @@ jobs:
             --title "$TITLE" \
             --body-file pr_body.md \
             --base main \
-            --head "${{ github.ref_name }}")
+            --head "$HEAD_REF")
 
           PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
           echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
@@ -272,11 +291,12 @@ jobs:
           echo "Created PR #${PR_NUMBER}: ${PR_URL}"
 
       - name: Update status.json to pending
+        env:
+          MODEL: ${{ steps.parse.outputs.model }}
+          VARIANT: ${{ steps.parse.outputs.variant }}
+          COLOUR: ${{ steps.parse.outputs.colour }}
+          PR_NUMBER: ${{ steps.create_pr.outputs.pr_number }}
         run: |
-          MODEL="${{ steps.parse.outputs.model }}"
-          VARIANT="${{ steps.parse.outputs.variant }}"
-          COLOUR="${{ steps.parse.outputs.colour }}"
-          PR_NUMBER="${{ steps.create_pr.outputs.pr_number }}"
           STATUS_KEY="${MODEL}/${VARIANT}/${COLOUR}"
 
           # Checkout main to update status.json
