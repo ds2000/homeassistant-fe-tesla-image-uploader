@@ -2,7 +2,13 @@
 
 Community image contribution pipeline for the [homeassistant-fe-tesla](https://github.com/ds2000/homeassistant-fe-tesla) card.
 
+If you find the card useful: [<img src="https://raw.githubusercontent.com/ds2000/homeassistant-fe-tesla/main/images/bmac.jpeg" height="32">](https://www.buymeacoffee.com/daveshaw301)
+
 Contributors submit car images via a GitHub Pages web app. Submissions are automatically validated, aligned against reference images using OpenCV, and opened as PRs for review before being merged into the image library.
+
+| Submission App | Local Testbed |
+|---------------|--------------|
+| ![Uploader](docs/assets/uploader-screenshot.png) | ![Testbed](docs/assets/testbed-screenshot.png) |
 
 ## How It Works
 
