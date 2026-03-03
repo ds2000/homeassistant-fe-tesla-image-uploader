@@ -9,6 +9,8 @@
     var GITHUB_PAT = 'YOUR_GITHUB_PAT_HERE'; // actions:write only — safe to commit
     var GITHUB_UPLOAD_PAT = 'YOUR_GITHUB_UPLOAD_PAT_HERE'; // contents:write scope
     var REPO = 'ds2000/homeassistant-fe-tesla-image-uploader';
+    var CARD_REPO = 'ds2000/homeassistant-fe-tesla';
+    var MODELS_URL = 'https://raw.githubusercontent.com/' + CARD_REPO + '/main/models.json';
     var WORKFLOW_FILE = 'send-verification.yml';
     var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
 
@@ -66,6 +68,14 @@
             'Close the front doors, then open BOTH rear doors (driver and passenger side)',
             'Wait for both door-open animations to finish completely',
             'Take a screenshot \u2014 both rear doors should be fully open'
+          ] } },
+        { key: 'all_doors', filename: 'all_doors.png', label: 'All Four Doors',
+          description: 'Side view with ALL four doors open simultaneously.',
+          instruction: { title: 'All four doors open', steps: [
+            'Open the Tesla app \u2192 Controls',
+            'Open ALL four doors (both front and both rear) simultaneously',
+            'Wait for all door-open animations to finish completely',
+            'Take a screenshot \u2014 all four doors should be fully open'
           ] } },
         { key: 'controls', filename: 'top_controls.png', label: 'Controls Panel',
           description: 'Top-down car view from the Controls screen.',
@@ -125,28 +135,20 @@
             'Wait for both door-open animations to finish completely',
             'Take a screenshot \u2014 cable and both open doors should be visible'
           ] } },
-        { key: 'oc_controls', filename: 'oc_top_controls.png', label: 'Controls Panel',
-          description: 'Top-down car view from the Controls screen while charging.',
-          instruction: { title: 'Charging \u2014 controls panel', steps: [
+        { key: 'oc_all_doors', filename: 'oc_all_doors.png', label: 'All Four Doors',
+          description: 'Side view while charging with ALL four doors open simultaneously.',
+          instruction: { title: 'Charging \u2014 all four doors', steps: [
             'Keep the charger plugged in',
-            'Open the Tesla app \u2192 Controls \u2192 tap the car for top-down view',
-            'Ensure all doors and trunk are closed',
-            'Take a screenshot \u2014 the charging cable should be visible'
+            'Open ALL four doors (both front and both rear) simultaneously',
+            'Wait for all door-open animations to finish completely',
+            'Take a screenshot \u2014 cable and all four open doors should be visible'
           ] } },
-        { key: 'oc_climate', filename: 'oc_top_climate.png', label: 'Climate Panel',
-          description: 'Top-down interior view from the Climate screen while charging.',
-          instruction: { title: 'Charging \u2014 climate panel', steps: [
-            'Keep the charger plugged in',
-            'Open the Tesla app \u2192 Climate',
-            'Turn OFF the climate system \u2014 seat heater icons must be hidden',
-            'Take a screenshot of the full top-down interior view'
-          ] } }
     ];
 
     // ── DOM refs ────────────────────────────────────────────────────────
 
     var $model = document.getElementById('select-model');
-    var $year = document.getElementById('select-year');
+    var $variant = document.getElementById('select-variant');
     var $colour = document.getElementById('select-colour');
     var $colourStatus = document.getElementById('colour-status-msg');
     var $btnStep2 = document.getElementById('btn-to-step2');
@@ -188,8 +190,9 @@
 
     // ── State ───────────────────────────────────────────────────────────
 
-    var statusData = null;
-    var selection = { model: '', year: '', colour: '' };
+    var modelsData = null;   // from card repo models.json
+    var statusData = null;   // flat status map {path: {status, pr?}}
+    var selection = { model: '', variant: '', colour: '' };
     var verificationToken = '';
     var uploadedFiles = {};
     var currentLayerIndex = 0;
@@ -197,15 +200,48 @@
 
     // ── Helpers ─────────────────────────────────────────────────────────
 
-    function formatColourName(key) {
-        return key.replace(/_/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+    function statusKey() {
+        return selection.model + '/' + selection.variant + '/' + selection.colour;
+    }
+
+    function getStatus(modelId, variantId, colourId) {
+        var key = modelId + '/' + variantId + '/' + colourId;
+        return statusData[key] || { status: 'available' };
+    }
+
+    function findModel(id) {
+        if (!modelsData) return null;
+        for (var i = 0; i < modelsData.models.length; i++) {
+            if (modelsData.models[i].id === id) return modelsData.models[i];
+        }
+        return null;
+    }
+
+    function findVariant(modelId, variantId) {
+        var m = findModel(modelId);
+        if (!m) return null;
+        for (var i = 0; i < m.variants.length; i++) {
+            if (m.variants[i].id === variantId) return m.variants[i];
+        }
+        return null;
+    }
+
+    function findColour(modelId, variantId, colourId) {
+        var v = findVariant(modelId, variantId);
+        if (!v) return null;
+        for (var i = 0; i < v.colours.length; i++) {
+            if (v.colours[i].id === colourId) return v.colours[i];
+        }
+        return null;
     }
 
     function comboLabel() {
-        if (!statusData || !selection.model || !selection.year || !selection.colour) return '';
-        var m = statusData.models[selection.model];
-        var y = m.years[selection.year];
-        return m.label + ' ' + y.label + ' — ' + formatColourName(selection.colour);
+        if (!modelsData || !selection.model || !selection.variant || !selection.colour) return '';
+        var m = findModel(selection.model);
+        var v = findVariant(selection.model, selection.variant);
+        var c = findColour(selection.model, selection.variant, selection.colour);
+        if (!m || !v || !c) return '';
+        return m.name + ' ' + v.label + ' — ' + c.name;
     }
 
     function setStep(n) {
@@ -219,6 +255,14 @@
         });
         document.querySelector('.container').classList.toggle('container-wide', n === 3);
         if (n === 3) initUploadWizard();
+
+        // Stagger animate the visible step's children
+        var activeStep = document.getElementById('step-' + n);
+        if (activeStep) {
+            activeStep.classList.remove('stagger-children');
+            void activeStep.offsetWidth;
+            activeStep.classList.add('stagger-children');
+        }
     }
 
     // ── Crypto helpers (Web Crypto API) ────────────────────────────────
@@ -234,8 +278,8 @@
         );
     }
 
-    function computeSignature(token, model, year, colour) {
-        var message = token + model + year + colour;
+    function computeSignature(token, model, variant, colour) {
+        var message = token + model + variant + colour;
         var enc = new TextEncoder();
         return getHmacKey().then(function (key) {
             return crypto.subtle.sign('HMAC', key, enc.encode(message));
@@ -246,8 +290,8 @@
         });
     }
 
-    function verifySignature(token, model, year, colour, sig) {
-        return computeSignature(token, model, year, colour).then(function (expected) {
+    function verifySignature(token, model, variant, colour, sig) {
+        return computeSignature(token, model, variant, colour).then(function (expected) {
             return expected === sig;
         });
     }
@@ -256,40 +300,40 @@
 
     function populateModels() {
         $model.innerHTML = '<option value="">Choose a model</option>';
-        var models = statusData.models;
-        Object.keys(models).forEach(function (key) {
+        modelsData.models.forEach(function (m) {
             var opt = document.createElement('option');
-            opt.value = key;
-            opt.textContent = models[key].label;
+            opt.value = m.id;
+            opt.textContent = m.name;
             $model.appendChild(opt);
         });
         $model.disabled = false;
     }
 
-    function populateYears() {
-        $year.innerHTML = '';
-        $colour.innerHTML = '<option value="">Select a year range first</option>';
+    function populateVariants() {
+        $variant.innerHTML = '';
+        $colour.innerHTML = '<option value="">Select a variant first</option>';
         $colour.disabled = true;
         $colourStatus.hidden = true;
         $btnStep2.disabled = true;
-        selection.year = '';
+        selection.variant = '';
         selection.colour = '';
 
         if (!selection.model) {
-            $year.innerHTML = '<option value="">Select a model first</option>';
-            $year.disabled = true;
+            $variant.innerHTML = '<option value="">Select a model first</option>';
+            $variant.disabled = true;
             return;
         }
 
-        var years = statusData.models[selection.model].years;
-        $year.innerHTML = '<option value="">Choose a year range</option>';
-        Object.keys(years).forEach(function (key) {
+        var m = findModel(selection.model);
+        if (!m) return;
+        $variant.innerHTML = '<option value="">Choose a variant</option>';
+        m.variants.forEach(function (v) {
             var opt = document.createElement('option');
-            opt.value = key;
-            opt.textContent = years[key].label;
-            $year.appendChild(opt);
+            opt.value = v.id;
+            opt.textContent = v.label;
+            $variant.appendChild(opt);
         });
-        $year.disabled = false;
+        $variant.disabled = false;
     }
 
     function populateColours() {
@@ -298,20 +342,21 @@
         $btnStep2.disabled = true;
         selection.colour = '';
 
-        if (!selection.year) {
-            $colour.innerHTML = '<option value="">Select a year range first</option>';
+        if (!selection.variant) {
+            $colour.innerHTML = '<option value="">Select a variant first</option>';
             $colour.disabled = true;
             return;
         }
 
-        var colours = statusData.models[selection.model].years[selection.year].colours;
+        var v = findVariant(selection.model, selection.variant);
+        if (!v) return;
         $colour.innerHTML = '<option value="">Choose a colour</option>';
-        Object.keys(colours).forEach(function (key) {
-            var entry = colours[key];
+        v.colours.forEach(function (c) {
             var opt = document.createElement('option');
-            opt.value = key;
+            opt.value = c.id;
 
-            var label = formatColourName(key);
+            var label = c.name;
+            var entry = getStatus(selection.model, selection.variant, c.id);
             if (entry.status === 'pending') {
                 label += ' — Under review';
                 opt.disabled = true;
@@ -332,10 +377,10 @@
 
         if (!selection.colour) return;
 
-        var entry = statusData.models[selection.model].years[selection.year].colours[selection.colour];
+        var entry = getStatus(selection.model, selection.variant, selection.colour);
         if (entry.status === 'pending') {
             $colourStatus.className = 'status-msg pending';
-            $colourStatus.textContent = 'This combination is currently under review (PR #' + entry.pr + '). Please choose another.';
+            $colourStatus.textContent = 'This combination is currently under review' + (entry.pr ? ' (PR #' + entry.pr + ')' : '') + '. Please choose another.';
             $colourStatus.hidden = false;
         } else if (entry.status === 'complete') {
             $colourStatus.className = 'status-msg complete';
@@ -365,13 +410,13 @@
 
         verificationToken = crypto.randomUUID();
 
-        computeSignature(verificationToken, selection.model, selection.year, selection.colour)
+        computeSignature(verificationToken, selection.model, selection.variant, selection.colour)
             .then(function (sig) {
                 // Store in sessionStorage so we can recover on page refresh
                 sessionStorage.setItem('verify_token', verificationToken);
                 sessionStorage.setItem('verify_sig', sig);
                 sessionStorage.setItem('verify_model', selection.model);
-                sessionStorage.setItem('verify_year', selection.year);
+                sessionStorage.setItem('verify_variant', selection.variant);
                 sessionStorage.setItem('verify_colour', selection.colour);
 
                 var tokenHash = verificationToken + ':' + sig;
@@ -391,7 +436,7 @@
                                 email: email,
                                 token_hash: tokenHash,
                                 model: selection.model,
-                                year_range: selection.year,
+                                variant: selection.variant,
                                 colour: selection.colour
                             }
                         })
@@ -426,15 +471,15 @@
         var token = params.get('token');
         var sig = params.get('sig');
         var model = params.get('model');
-        var year = params.get('year');
+        var variant = params.get('variant');
         var colour = params.get('colour');
 
-        if (!token || !sig || !model || !year || !colour) return false;
+        if (!token || !sig || !model || !variant || !colour) return false;
 
         // Clean URL without reloading
         window.history.replaceState({}, '', window.location.pathname);
 
-        verifySignature(token, model, year, colour, sig).then(function (valid) {
+        verifySignature(token, model, variant, colour, sig).then(function (valid) {
             if (!valid) {
                 alert('Invalid verification link. The signature does not match. Please request a new verification email.');
                 return;
@@ -443,12 +488,12 @@
             // Store verified state in sessionStorage
             sessionStorage.setItem('verified', 'true');
             sessionStorage.setItem('verified_model', model);
-            sessionStorage.setItem('verified_year', year);
+            sessionStorage.setItem('verified_variant', variant);
             sessionStorage.setItem('verified_colour', colour);
 
             // Apply selection and go to step 3
             selection.model = model;
-            selection.year = year;
+            selection.variant = variant;
             selection.colour = colour;
             $uploadCombo.textContent = comboLabel();
             setStep(3);
@@ -461,16 +506,14 @@
         if (sessionStorage.getItem('verified') !== 'true') return false;
 
         var model = sessionStorage.getItem('verified_model');
-        var year = sessionStorage.getItem('verified_year');
+        var variant = sessionStorage.getItem('verified_variant');
         var colour = sessionStorage.getItem('verified_colour');
 
-        if (!model || !year || !colour) return false;
-        if (!statusData.models[model]) return false;
-        if (!statusData.models[model].years[year]) return false;
-        if (!statusData.models[model].years[year].colours[colour]) return false;
+        if (!model || !variant || !colour) return false;
+        if (!findColour(model, variant, colour)) return false;
 
         selection.model = model;
-        selection.year = year;
+        selection.variant = variant;
         selection.colour = colour;
         $uploadCombo.textContent = comboLabel();
         setStep(3);
@@ -562,16 +605,36 @@
         } else {
             $btnUploadNext.textContent = 'Next';
         }
+
+        // Stagger animate wizard content
+        var uploadMain = $uploadGuide.parentNode;
+        if (uploadMain) {
+            uploadMain.classList.remove('stagger-content');
+            void uploadMain.offsetWidth;
+            uploadMain.classList.add('stagger-content');
+        }
     }
 
     function loadGuide(layerKey) {
         $uploadGuide.innerHTML = '';
         var guidePath = 'assets/guides/' + layerKey + '.png';
 
+        // Build iPhone mockup frame
+        var mockup = document.createElement('div');
+        mockup.className = 'phone-mockup phone-animate-in';
+
+        var notch = document.createElement('div');
+        notch.className = 'phone-notch';
+
+        var screen = document.createElement('div');
+        screen.className = 'phone-screen';
+
         var img = document.createElement('img');
-        img.className = 'upload-guide-img';
         img.alt = 'Guide: ' + layerKey;
         img.src = guidePath;
+
+        var homeBar = document.createElement('div');
+        homeBar.className = 'phone-home-bar';
 
         img.addEventListener('error', function () {
             if (LAYERS[currentLayerIndex].key === layerKey) {
@@ -583,8 +646,13 @@
             }
         });
 
+        screen.appendChild(img);
+        mockup.appendChild(notch);
+        mockup.appendChild(screen);
+        mockup.appendChild(homeBar);
+
         if (LAYERS[currentLayerIndex].key === layerKey) {
-            $uploadGuide.appendChild(img);
+            $uploadGuide.appendChild(mockup);
         }
     }
 
@@ -728,6 +796,83 @@
         });
     }
 
+    // ── Auto-crop ────────────────────────────────────────────────────
+    // Crops phone screenshots to just the car rendering, removing the
+    // cellular/battery/wifi status bar at top and app UI below the car.
+
+    function cropScreenshot(file, callback) {
+        var img = new Image();
+        var url = URL.createObjectURL(file);
+        img.onload = function () {
+            var canvas = document.createElement('canvas');
+            var ctx = canvas.getContext('2d');
+            canvas.width = img.width;
+            canvas.height = img.height;
+            ctx.drawImage(img, 0, 0);
+
+            var data = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            var px = data.data;
+            var w = canvas.width;
+            var h = canvas.height;
+
+            // Sample background color from top-left 20x20 block
+            var sampleN = Math.min(20, Math.floor(w * 0.02) || 1);
+            var bgR = 0, bgG = 0, bgB = 0, cnt = 0;
+            for (var sy = 0; sy < sampleN; sy++) {
+                for (var sx = 0; sx < sampleN; sx++) {
+                    var si = (sy * w + sx) * 4;
+                    bgR += px[si]; bgG += px[si + 1]; bgB += px[si + 2];
+                    cnt++;
+                }
+            }
+            bgR /= cnt; bgG /= cnt; bgB /= cnt;
+
+            // For each row, measure fraction of non-background pixels
+            var threshold = 30; // Euclidean RGB distance
+            var minCoverage = 0.03; // 3% of row width = car content
+            var topY = 0, bottomY = h - 1;
+
+            for (var y = 0; y < h; y++) {
+                var nonBg = 0;
+                for (var x = 0; x < w; x++) {
+                    var i = (y * w + x) * 4;
+                    var dr = px[i] - bgR, dg = px[i + 1] - bgG, db = px[i + 2] - bgB;
+                    if (Math.sqrt(dr * dr + dg * dg + db * db) > threshold) nonBg++;
+                }
+                if (nonBg / w >= minCoverage) { topY = y; break; }
+            }
+
+            for (var y = h - 1; y >= 0; y--) {
+                var nonBg = 0;
+                for (var x = 0; x < w; x++) {
+                    var i = (y * w + x) * 4;
+                    var dr = px[i] - bgR, dg = px[i + 1] - bgG, db = px[i + 2] - bgB;
+                    if (Math.sqrt(dr * dr + dg * dg + db * db) > threshold) nonBg++;
+                }
+                if (nonBg / w >= minCoverage) { bottomY = y; break; }
+            }
+
+            // Padding: 2% of car height
+            var carH = bottomY - topY;
+            var pad = Math.max(2, Math.floor(carH * 0.02));
+            topY = Math.max(0, topY - pad);
+            bottomY = Math.min(h - 1, bottomY + pad);
+
+            var cropH = bottomY - topY + 1;
+            var cropCanvas = document.createElement('canvas');
+            cropCanvas.width = w;
+            cropCanvas.height = cropH;
+            cropCanvas.getContext('2d').drawImage(canvas, 0, topY, w, cropH, 0, 0, w, cropH);
+
+            cropCanvas.toBlob(function (blob) {
+                var cropped = new File([blob], file.name, { type: 'image/png' });
+                URL.revokeObjectURL(url);
+                callback(cropped);
+            }, 'image/png');
+        };
+        img.src = url;
+    }
+
     // ── Upload: file handling & validation ───────────────────────────────
 
     function validatePng(file) {
@@ -761,21 +906,25 @@
             }
 
             hideUploadError();
-            uploadedFiles[layerKey] = file;
 
-            if (thumb.dataset.objectUrl) {
-                URL.revokeObjectURL(thumb.dataset.objectUrl);
-            }
-            var url = URL.createObjectURL(file);
-            thumb.src = url;
-            thumb.dataset.objectUrl = url;
+            // Auto-crop: remove phone status bar + app UI below the car
+            cropScreenshot(file, function (croppedFile) {
+                uploadedFiles[layerKey] = croppedFile;
 
-            emptyState.hidden = true;
-            thumbWrap.hidden = false;
-            dropzone.classList.add('filled');
+                if (thumb.dataset.objectUrl) {
+                    URL.revokeObjectURL(thumb.dataset.objectUrl);
+                }
+                var url = URL.createObjectURL(croppedFile);
+                thumb.src = url;
+                thumb.dataset.objectUrl = url;
 
-            updateSidebarStatus();
-            updateUploadCounter();
+                emptyState.hidden = true;
+                thumbWrap.hidden = false;
+                dropzone.classList.add('filled');
+
+                updateSidebarStatus();
+                updateUploadCounter();
+            });
         });
     }
 
@@ -895,12 +1044,12 @@
 
     async function submitToGitHub() {
         var model = selection.model;
-        var year = selection.year;
+        var variant = selection.variant;
         var colour = selection.colour;
         var shortToken = Array.from(crypto.getRandomValues(new Uint8Array(2)))
             .map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
-        var branchName = 'submissions/' + model + '-' + year + '-' + colour + '-' + shortToken;
-        var dirPath = 'submissions/' + model + '-' + year + '-' + colour + '/';
+        var branchName = 'submissions/' + model + '-' + variant + '-' + colour + '-' + shortToken;
+        var dirPath = 'submissions/' + model + '-' + variant + '-' + colour + '/';
 
         try {
             hideUploadError();
@@ -942,7 +1091,7 @@
             // 5. Create commit
             setUploadProgress('Creating commit...', 92);
             var commit = await ghApi('POST', '/repos/' + REPO + '/git/commits', {
-                message: 'submission: ' + model + ' ' + year + ' ' + formatColourName(colour),
+                message: 'submission: ' + model + '/' + variant + '/' + colour,
                 tree: tree.sha,
                 parents: [headSha]
             });
@@ -968,11 +1117,11 @@
 
     $model.addEventListener('change', function () {
         selection.model = $model.value;
-        populateYears();
+        populateVariants();
     });
 
-    $year.addEventListener('change', function () {
-        selection.year = $year.value;
+    $variant.addEventListener('change', function () {
+        selection.variant = $variant.value;
         populateColours();
     });
 
@@ -1002,7 +1151,7 @@
     $btnDevSkip.addEventListener('click', function () {
         sessionStorage.setItem('verified', 'true');
         sessionStorage.setItem('verified_model', selection.model);
-        sessionStorage.setItem('verified_year', selection.year);
+        sessionStorage.setItem('verified_variant', selection.variant);
         sessionStorage.setItem('verified_colour', selection.colour);
         $uploadCombo.textContent = comboLabel();
         setStep(3);
@@ -1045,7 +1194,7 @@
     $btnBack1From3.addEventListener('click', function () {
         sessionStorage.removeItem('verified');
         sessionStorage.removeItem('verified_model');
-        sessionStorage.removeItem('verified_year');
+        sessionStorage.removeItem('verified_variant');
         sessionStorage.removeItem('verified_colour');
         resetUploadState();
         setStep(1);
@@ -1053,37 +1202,45 @@
 
     // ── Init ───────────────────────────────────────────────────────────
 
-    // Check for verification callback first (before status.json loads)
+    // Check for verification callback first (before data loads)
     var hasCallback = checkVerificationCallback();
 
     // Determine base URL for status.json — works on GitHub Pages and local dev
     var statusUrl = (function () {
+        var host = window.location.hostname;
+        if (host === 'localhost' || host === '127.0.0.1') {
+            return 'status.json';
+        }
         var base = window.location.origin + window.location.pathname;
-        // If served from /docs/ subdir locally, go up one level
         if (base.indexOf('/docs/') !== -1) {
             return base.replace(/\/docs\/.*$/, '/status.json');
         }
-        // GitHub Pages: status.json is at repo root, served alongside docs/
-        // Fetch from the raw main branch as a reliable fallback
         return 'https://raw.githubusercontent.com/' + REPO + '/main/status.json';
     })();
 
-    fetch(statusUrl)
-        .then(function (resp) {
-            if (!resp.ok) throw new Error('Failed to load status.json');
-            return resp.json();
+    // Fetch models.json (from card repo) and status.json in parallel
+    Promise.all([
+        fetch(MODELS_URL).then(function (r) {
+            if (!r.ok) throw new Error('Failed to load models.json');
+            return r.json();
+        }),
+        fetch(statusUrl).then(function (r) {
+            if (!r.ok) throw new Error('Failed to load status.json');
+            return r.json();
         })
-        .then(function (data) {
-            statusData = data;
-            populateModels();
+    ])
+    .then(function (results) {
+        modelsData = results[0];
+        statusData = results[1];
+        populateModels();
 
-            // If we didn't arrive via a callback link, check sessionStorage
-            if (!hasCallback) {
-                checkSessionVerification();
-            }
-        })
-        .catch(function (err) {
-            $model.innerHTML = '<option value="">Failed to load — please refresh</option>';
-            console.error('Error loading status.json:', err);
-        });
+        // If we didn't arrive via a callback link, check sessionStorage
+        if (!hasCallback) {
+            checkSessionVerification();
+        }
+    })
+    .catch(function (err) {
+        $model.innerHTML = '<option value="">Failed to load — please refresh</option>';
+        console.error('Error loading data:', err);
+    });
 })();

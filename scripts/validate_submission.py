@@ -7,19 +7,29 @@ import os
 import struct
 import sys
 
-# Must match the output names from process_screenshots.py
-REQUIRED_FILES = [
-    "base.png",
-    "chargeport-open.png",
-    "frunk-open.png",
-    "trunk-open.png",
-    "df-open.png",
-    "dr-open.png",
-    "pf-open.png",
-    "pr-open.png",
-    "controls-bg.png",
-    "climate-bg.png",
+# Must match the upload filenames from the web app (docs/submit.js LAYERS).
+REQUIRED_OFFCHARGE = [
+    "closed.png",
+    "cp.png",
+    "cp_ft.png",
+    "rt.png",
+    "front_doors.png",
+    "rear_doors.png",
+    "all_doors.png",
+    "top_controls.png",
+    "top_climate.png",
 ]
+
+REQUIRED_ONCHARGE = [
+    "oc_closed.png",
+    "oc_cp_ft.png",
+    "oc_rt.png",
+    "oc_front_doors.png",
+    "oc_rear_doors.png",
+    "oc_all_doors.png",
+]
+
+REQUIRED_FILES = REQUIRED_OFFCHARGE + REQUIRED_ONCHARGE
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 

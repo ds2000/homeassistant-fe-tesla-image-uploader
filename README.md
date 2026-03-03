@@ -6,9 +6,9 @@ Contributors submit car images via a GitHub Pages web app. Submissions are autom
 
 ## How It Works
 
-1. **Select** your Tesla model, year range, and colour
+1. **Select** your Tesla model, variant, and colour
 2. **Verify** your email address
-3. **Upload** all required image layers (11 transparent PNGs)
+3. **Upload** all required screenshots (15 PNGs -- 9 offcharge + 6 on-charge)
 4. Images are automatically aligned, processed, and submitted as a PR
 
 ## Links

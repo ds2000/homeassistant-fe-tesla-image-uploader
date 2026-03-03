@@ -12,13 +12,13 @@ on:
         description: 'HMAC token hash (uuid:hex-signature)'
         required: true
       model:
-        description: 'Tesla model key'
+        description: 'Tesla model ID (from models.json)'
         required: true
-      year_range:
-        description: 'Year range key'
+      variant:
+        description: 'Variant ID (from models.json)'
         required: true
       colour:
-        description: 'Colour key'
+        description: 'Colour ID (from models.json)'
         required: true
 
 jobs:
@@ -26,6 +26,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Fetch models.json from card repo
+        run: |
+          curl -sL "https://raw.githubusercontent.com/ds2000/homeassistant-fe-tesla/main/models.json" \
+            -o models.json
+          echo "Fetched models.json"
 
       - name: Validate inputs
         run: |
@@ -43,25 +49,29 @@ jobs:
             exit 1
           fi
 
-          # Validate model exists in status.json
+          # Validate model exists in models.json
           MODEL="${{ github.event.inputs.model }}"
-          if ! jq -e --arg m "$MODEL" '.models[$m]' status.json > /dev/null 2>&1; then
+          if ! jq -e --arg m "$MODEL" \
+            '.models[] | select(.id == $m)' models.json > /dev/null 2>&1; then
             echo "::error::Unknown model: $MODEL"
             exit 1
           fi
 
-          # Validate year_range exists for this model
-          YEAR="${{ github.event.inputs.year_range }}"
-          if ! jq -e --arg m "$MODEL" --arg y "$YEAR" '.models[$m].years[$y]' status.json > /dev/null 2>&1; then
-            echo "::error::Unknown year range: $YEAR for model $MODEL"
+          # Validate variant exists for this model
+          VARIANT="${{ github.event.inputs.variant }}"
+          if ! jq -e --arg m "$MODEL" --arg v "$VARIANT" \
+            '.models[] | select(.id == $m) | .variants[] | select(.id == $v)' \
+            models.json > /dev/null 2>&1; then
+            echo "::error::Unknown variant: $VARIANT for model $MODEL"
             exit 1
           fi
 
-          # Validate colour exists for this model/year
+          # Validate colour exists for this model/variant
           COLOUR="${{ github.event.inputs.colour }}"
-          if ! jq -e --arg m "$MODEL" --arg y "$YEAR" --arg c "$COLOUR" \
-            '.models[$m].years[$y].colours[$c]' status.json > /dev/null 2>&1; then
-            echo "::error::Unknown colour: $COLOUR for $MODEL $YEAR"
+          if ! jq -e --arg m "$MODEL" --arg v "$VARIANT" --arg c "$COLOUR" \
+            '.models[] | select(.id == $m) | .variants[] | select(.id == $v) | .colours[] | select(.id == $c)' \
+            models.json > /dev/null 2>&1; then
+            echo "::error::Unknown colour: $COLOUR for $MODEL/$VARIANT"
             exit 1
           fi
 
@@ -74,17 +84,19 @@ jobs:
           SIG="${TOKEN_HASH#*:}"
 
           MODEL="${{ github.event.inputs.model }}"
-          YEAR="${{ github.event.inputs.year_range }}"
+          VARIANT="${{ github.event.inputs.variant }}"
           COLOUR="${{ github.event.inputs.colour }}"
           EMAIL="${{ github.event.inputs.email }}"
 
-          # Read display labels from status.json
-          MODEL_LABEL=$(jq -r --arg m "$MODEL" '.models[$m].label' status.json)
-          YEAR_LABEL=$(jq -r --arg m "$MODEL" --arg y "$YEAR" '.models[$m].years[$y].label' status.json)
-          # Format colour: replace underscores with spaces, title case
-          COLOUR_LABEL=$(echo "$COLOUR" | sed 's/_/ /g; s/\b\(.\)/\u\1/g')
+          # Read display labels from models.json
+          MODEL_LABEL=$(jq -r --arg m "$MODEL" \
+            '.models[] | select(.id == $m) | .name' models.json)
+          VARIANT_LABEL=$(jq -r --arg m "$MODEL" --arg v "$VARIANT" \
+            '.models[] | select(.id == $m) | .variants[] | select(.id == $v) | .label' models.json)
+          COLOUR_LABEL=$(jq -r --arg m "$MODEL" --arg v "$VARIANT" --arg c "$COLOUR" \
+            '.models[] | select(.id == $m) | .variants[] | select(.id == $v) | .colours[] | select(.id == $c) | .name' models.json)
 
-          VERIFY_URL="https://ds2000.github.io/homeassistant-fe-tesla-image-uploader/?token=${TOKEN}&sig=${SIG}&model=${MODEL}&year=${YEAR}&colour=${COLOUR}"
+          VERIFY_URL="https://ds2000.github.io/homeassistant-fe-tesla-image-uploader/?token=${TOKEN}&sig=${SIG}&model=${MODEL}&variant=${VARIANT}&colour=${COLOUR}"
 
           # Build HTML email body
           HTML_BODY=$(cat <<'EMAILEOF'
@@ -112,7 +124,7 @@ jobs:
                           <tr>
                             <td style="padding:16px 20px;">
                               <p style="margin:0;color:#ffffff;font-size:16px;font-weight:600;">
-                                __MODEL_LABEL__ __YEAR_LABEL__
+                                __MODEL_LABEL__ __VARIANT_LABEL__
                               </p>
                               <p style="margin:4px 0 0;color:#e82127;font-size:15px;font-weight:500;">
                                 __COLOUR_LABEL__
@@ -157,7 +169,7 @@ jobs:
 
           # Replace placeholders in HTML
           HTML_BODY="${HTML_BODY//__MODEL_LABEL__/$MODEL_LABEL}"
-          HTML_BODY="${HTML_BODY//__YEAR_LABEL__/$YEAR_LABEL}"
+          HTML_BODY="${HTML_BODY//__VARIANT_LABEL__/$VARIANT_LABEL}"
           HTML_BODY="${HTML_BODY//__COLOUR_LABEL__/$COLOUR_LABEL}"
           HTML_BODY="${HTML_BODY//__VERIFY_URL__/$VERIFY_URL}"
 

@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tesla Card Image Uploader</title>
+    <link rel="icon" href="favicon.ico">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -35,7 +36,7 @@
         <!-- Step 1: Select combination -->
         <section id="step-1" class="step">
             <h2 class="step-title">Select your Tesla</h2>
-            <p class="step-desc">Choose the model, year range, and colour you want to contribute images for.</p>
+            <p class="step-desc">Choose the model, variant, and colour you want to contribute images for.</p>
 
             <div class="form-group">
                 <label for="select-model" class="form-label">Model</label>
@@ -45,8 +46,8 @@
             </div>
 
             <div class="form-group">
-                <label for="select-year" class="form-label">Year range</label>
-                <select id="select-year" class="form-select" disabled>
+                <label for="select-variant" class="form-label">Variant</label>
+                <select id="select-variant" class="form-select" disabled>
                     <option value="">Select a model first</option>
                 </select>
             </div>
@@ -54,7 +55,7 @@
             <div class="form-group">
                 <label for="select-colour" class="form-label">Colour</label>
                 <select id="select-colour" class="form-select" disabled>
-                    <option value="">Select a year range first</option>
+                    <option value="">Select a variant first</option>
                 </select>
             </div>
 
@@ -93,7 +94,7 @@
         <section id="step-3" class="step" hidden>
             <h2 class="step-title">Upload screenshots</h2>
             <p class="step-desc">Take 15 screenshots from the Tesla app for
-                <strong id="upload-combo-label"></strong> — 8 unplugged and 7 on charge.</p>
+                <strong id="upload-combo-label"></strong> — 9 unplugged and 6 on charge.</p>
 
             <div class="notice notice-info upload-tips">
                 <p><strong>Before you start:</strong></p>

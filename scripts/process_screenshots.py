@@ -96,8 +96,8 @@ SIDE_VIEW_PATTERNS_OFFCHARGE = {
 SIDE_VIEW_PATTERNS_ONCHARGE = {
     "nf-open": ["pf"],                  # near-front (left of image)
     "nr-open": ["pr"],                  # near-rear
+    "ff-open": ["cp_df", "df"],         # far-front (right of image)
     "fr-open": ["cp_dr", "dr"],         # far-rear (right of image)
-    # ff (far-front) is not visible in the rear 3/4 oncharge view
 }
 
 # Combined-door input patterns: contributor supplies a screenshot with BOTH
@@ -122,6 +122,21 @@ PANEL_PATTERNS = {
     "climate-bg": ["top_climate", "climate"],
 }
 
+# Oncharge variants for flat-directory submissions where all 13 files live in
+# one directory.  oc_-prefixed stems are tried first (matching the web-app
+# upload filenames), with unprefixed fallbacks for separate oncharge dirs.
+SIDE_VIEW_PATTERNS_COMMON_ONCHARGE = {
+    "base": ["oc_closed", "oc_base", "oc_all_closed"] + ["closed", "base", "all_closed"],
+    "frunk-open": ["oc_ft", "oc_frunk", "oc_cp_ft"] + ["ft", "frunk", "cp_ft"],
+    "trunk-open": ["oc_rt", "oc_trunk", "oc_rear_trunk"] + ["rt", "trunk", "rear_trunk"],
+    # No chargeport-open for oncharge
+}
+
+PANEL_PATTERNS_ONCHARGE = {
+    "controls-bg": ["oc_top_controls", "oc_controls"] + ["top_controls", "controls"],
+    "climate-bg": ["oc_top_climate", "oc_climate"] + ["top_climate", "climate"],
+}
+
 # Combined-state screenshots: when multiple doors are open simultaneously the
 # appearance differs from compositing individual door overlays (different
 # shadows, interior visibility).  Map output name → (input stems, constituents).
@@ -134,8 +149,13 @@ COMBINED_PATTERNS_OFFCHARGE = {
 
 COMBINED_PATTERNS_ONCHARGE = {
     "nf-nr-combined": (["pf_pr", "pfpr"], ["nf", "nr"]),              # both near-side doors
-    # ff-fr-combined not applicable — ff not visible in rear 3/4 oncharge view
+    "ff-fr-combined": (["cp_df_dr", "dfdr", "df_dr"], ["ff", "fr"]),  # both far-side doors
 }
+
+# All-doors pattern: single screenshot with all 4 doors open.
+# Split into near/far halves → nf-nr-combined and ff-fr-combined.
+ALL_DOORS_PATTERN_OFFCHARGE = ["all_doors", "all_4_doors"]
+ALL_DOORS_PATTERN_ONCHARGE = ["oc_all_doors", "all_doors", "all_4_doors"]
 
 # Panel processing uses OpenCV inpainting (see inpaint_ui_overlays)
 # instead of zone-based cleanup — no hardcoded UI zone coordinates needed.
@@ -186,11 +206,13 @@ def detect_background_color(arr):
     """Detect background color by sampling the 4 corners of the image."""
     s = CORNER_SAMPLE_SIZE
     h, w = arr.shape[:2]
+    # Use only RGB channels (images may be RGBA)
+    rgb = arr[:, :, :3]
     corners = [
-        arr[:s, :s],
-        arr[:s, w - s:],
-        arr[h - s:, :s],
-        arr[h - s:, w - s:],
+        rgb[:s, :s],
+        rgb[:s, w - s:],
+        rgb[h - s:, :s],
+        rgb[h - s:, w - s:],
     ]
     all_pixels = np.concatenate([c.reshape(-1, 3) for c in corners], axis=0)
     return np.median(all_pixels, axis=0).astype(np.float64)
@@ -198,7 +220,8 @@ def detect_background_color(arr):
 
 def create_non_bg_mask(arr, bg_color, threshold=BG_DISTANCE_THRESHOLD):
     """Create a boolean mask where True = pixel is NOT background."""
-    diff = arr.astype(np.float64) - bg_color
+    rgb = arr[:, :, :3]
+    diff = rgb.astype(np.float64) - bg_color
     dist = np.sqrt(np.sum(diff ** 2, axis=2))
     return dist > threshold
 
@@ -354,8 +377,13 @@ def compute_crop_frame_from_union(union_bounds, img_shape,
         px1 = int(cx + new_w / 2)
 
     # Ensure crop starts below UI content (battery bar, etc.) but
-    # never clip the union bounds — the car content has priority.
-    effective_min_y0 = min(min_y0, uy0 - 1)
+    # preserve enough padding above the car for states that extend
+    # higher (trunk-open). Any residual UI text in the padding gets
+    # cleaned by remove_sideview_ui.
+    # Allow the crop to start at most halfway between py0 and uy0 —
+    # this keeps at least half the padding above the car intact.
+    min_padded_y0 = (py0 + uy0) // 2
+    effective_min_y0 = min(min_y0, min_padded_y0)
     if py0 < effective_min_y0:
         shift = effective_min_y0 - py0
         py0 += shift
@@ -797,11 +825,96 @@ def inpaint_controls_ui(car_img, car_mask, car_w, car_h):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Side-View Alignment
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _align_to_base(state_img, base_img, verbose=False):
+    """Align a cropped side-view image to the base using phase correlation.
+
+    The Tesla app may render the car at slightly different pixel positions
+    between screenshots, especially across different phone resolutions.
+    Even a 1–2 px shift causes the overlay diff to pick up the entire car
+    body edge as changed pixels.
+
+    Only the bottom 60% of the image (wheels, rocker panel, lower body) is
+    used for correlation since the top portion changes between states
+    (frunk, doors, trunk).
+
+    Args:
+        state_img: PIL Image (cropped side view to align).
+        base_img:  PIL Image (base / all-closed reference).
+        verbose:   Print shift diagnostics.
+
+    Returns:
+        Aligned PIL Image (same mode as input), or the original unchanged
+        if alignment fails or the shift is negligible (< 0.3 px).
+    """
+    state_arr = np.array(state_img.convert("RGB"))
+    base_arr = np.array(base_img.convert("RGB"))
+    h, w = state_arr.shape[:2]
+
+    if state_arr.shape != base_arr.shape:
+        if verbose:
+            print("    Alignment: size mismatch — skipped")
+        return state_img
+
+    # Use bottom 60% — wheels, rocker panel, lower body are stable across states
+    y_start = int(h * 0.4)
+    state_gray = cv2.cvtColor(state_arr[y_start:], cv2.COLOR_RGB2GRAY).astype(np.float64)
+    base_gray = cv2.cvtColor(base_arr[y_start:], cv2.COLOR_RGB2GRAY).astype(np.float64)
+
+    # Hann window reduces edge artefacts in the frequency domain
+    hann = cv2.createHanningWindow(
+        (state_gray.shape[1], state_gray.shape[0]), cv2.CV_64F)
+
+    try:
+        (dx, dy), response = cv2.phaseCorrelate(base_gray, state_gray, hann)
+    except cv2.error:
+        if verbose:
+            print("    Alignment: phase correlation failed — skipped")
+        return state_img
+
+    # Cap shift to 5% of image dimension — larger = detection error
+    max_dx = w * 0.05
+    max_dy = h * 0.05
+    if abs(dx) > max_dx or abs(dy) > max_dy:
+        if verbose:
+            print(f"    Alignment: shift ({dx:.2f}, {dy:.2f}) exceeds cap — skipped")
+        return state_img
+
+    # Skip negligible shifts
+    if abs(dx) < 0.3 and abs(dy) < 0.3:
+        if verbose:
+            print(f"    Alignment: shift ({dx:.2f}, {dy:.2f}) negligible")
+        return state_img
+
+    if verbose:
+        print(f"    Alignment: dx={dx:.2f}, dy={dy:.2f} (response={response:.4f})")
+
+    # Build affine translation matrix and warp
+    M = np.float32([[1, 0, -dx], [0, 1, -dy]])
+    src_arr = np.array(state_img)
+
+    if src_arr.ndim == 3 and src_arr.shape[2] == 4:
+        # RGBA — warp each channel to preserve alpha correctly
+        aligned = np.stack([
+            cv2.warpAffine(src_arr[:, :, c], M, (w, h),
+                           borderMode=cv2.BORDER_REPLICATE)
+            for c in range(4)
+        ], axis=2)
+    else:
+        aligned = cv2.warpAffine(src_arr, M, (w, h),
+                                 borderMode=cv2.BORDER_REPLICATE)
+
+    return Image.fromarray(aligned)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Side-View Processing
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def process_sideview(img_path, crop_frame, target_size=SIDE_VIEW_SIZE,
-                     verbose=False):
+                     verbose=False, full_res=False):
     """Process a single side-view screenshot using a pre-computed crop frame.
 
     Returns:
@@ -840,11 +953,16 @@ def process_sideview(img_path, crop_frame, target_size=SIDE_VIEW_SIZE,
     cx0, cy0, cx1, cy1 = crop_frame
     cropped = img.crop((cx0, cy0, cx1, cy1))
     remove_sideview_ui(cropped, bg_color)
-    result = cropped.resize(target_size, Image.Resampling.LANCZOS)
+    if full_res:
+        result = cropped
+    else:
+        result = cropped.resize(target_size, Image.Resampling.LANCZOS)
 
     if verbose:
         print(f"    Crop frame: ({cx0},{cy0})-({cx1},{cy1}) = {cx1-cx0}x{cy1-cy0}")
-        print(f"    Output: {target_size[0]}x{target_size[1]}")
+        out_size = result.size
+        print(f"    Output: {out_size[0]}x{out_size[1]}" +
+              (" (full-res)" if full_res else ""))
 
     info["success"] = True
     return result, info
@@ -854,7 +972,8 @@ def process_sideview(img_path, crop_frame, target_size=SIDE_VIEW_SIZE,
 # Panel Processing
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def process_controls_panel(img_path, target_size=CONTROLS_SIZE, verbose=False):
+def process_controls_panel(img_path, target_size=CONTROLS_SIZE, verbose=False,
+                           full_res=False):
     """Process the controls panel screenshot using OpenCV inpainting.
 
     Detects the car rendering, inpaints UI overlays (Open text, padlock,
@@ -917,11 +1036,16 @@ def process_controls_panel(img_path, target_size=CONTROLS_SIZE, verbose=False):
     # Convert back to RGB PIL Image
     cropped_rgb = cv2.cvtColor(cropped_bgr, cv2.COLOR_BGR2RGB)
     cropped_pil = Image.fromarray(cropped_rgb)
-    result = cropped_pil.resize(target_size, Image.Resampling.LANCZOS)
+    if full_res:
+        result = cropped_pil
+    else:
+        result = cropped_pil.resize(target_size, Image.Resampling.LANCZOS)
 
     if verbose:
+        out_size = result.size
         print(f"    Inpainted UI overlays (OpenCV)")
-        print(f"    Output: {target_size[0]}x{target_size[1]}")
+        print(f"    Output: {out_size[0]}x{out_size[1]}" +
+              (" (full-res)" if full_res else ""))
 
     info["success"] = True
     return result, info
@@ -1028,7 +1152,8 @@ def inpaint_climate_ui(img_bgr, car_mask, cx0, cy0, cx1, cy1):
     return cv2.inpaint(img_bgr, final_mask, inpaintRadius=12, flags=cv2.INPAINT_TELEA)
 
 
-def process_climate_panel(img_path, target_size=CLIMATE_SIZE, verbose=False):
+def process_climate_panel(img_path, target_size=CLIMATE_SIZE, verbose=False,
+                          full_res=False):
     """Process the climate panel screenshot using OpenCV inpainting.
 
     Uses targeted inpainting to remove seat heater icons and status bar
@@ -1127,11 +1252,14 @@ def process_climate_panel(img_path, target_size=CLIMATE_SIZE, verbose=False):
     # Convert back to RGB PIL Image
     canvas_rgb = cv2.cvtColor(canvas, cv2.COLOR_BGR2RGB)
     result = Image.fromarray(canvas_rgb)
-    result = result.resize(target_size, Image.Resampling.LANCZOS)
+    if not full_res:
+        result = result.resize(target_size, Image.Resampling.LANCZOS)
 
     if verbose:
+        out_size = result.size
         print(f"    Inpainted UI overlays (OpenCV)")
-        print(f"    Output: {target_size[0]}x{target_size[1]}")
+        print(f"    Output: {out_size[0]}x{out_size[1]}" +
+              (" (full-res)" if full_res else ""))
 
     info["ui_zones_applied"] = 1
     info["success"] = True
@@ -1263,8 +1391,12 @@ def auto_detect_mapping(input_dir, mode="offcharge"):
         if f.suffix.lower() == ".png" and f.is_file():
             files_by_stem[f.stem.lower()] = f.name
 
+    common_patterns = (SIDE_VIEW_PATTERNS_COMMON_ONCHARGE if mode == "oncharge"
+                       else SIDE_VIEW_PATTERNS_COMMON)
     door_patterns = (SIDE_VIEW_PATTERNS_ONCHARGE if mode == "oncharge"
                      else SIDE_VIEW_PATTERNS_OFFCHARGE)
+    panel_patterns = (PANEL_PATTERNS_ONCHARGE if mode == "oncharge"
+                      else PANEL_PATTERNS)
     combined_patterns = (COMBINED_PATTERNS_ONCHARGE if mode == "oncharge"
                          else COMBINED_PATTERNS_OFFCHARGE)
     combined_door_patterns = (COMBINED_DOOR_PATTERNS_ONCHARGE if mode == "oncharge"
@@ -1272,13 +1404,13 @@ def auto_detect_mapping(input_dir, mode="offcharge"):
 
     mapping = {"side_views": {}, "panels": {}, "combined": {},
                "combined_doors": {}}
-    for output_name, patterns in {**SIDE_VIEW_PATTERNS_COMMON, **door_patterns}.items():
+    for output_name, patterns in {**common_patterns, **door_patterns}.items():
         for pattern in patterns:
             if pattern.lower() in files_by_stem:
                 mapping["side_views"][output_name] = files_by_stem[pattern.lower()]
                 break
 
-    for output_name, patterns in PANEL_PATTERNS.items():
+    for output_name, patterns in panel_patterns.items():
         for pattern in patterns:
             if pattern.lower() in files_by_stem:
                 mapping["panels"][output_name] = files_by_stem[pattern.lower()]
@@ -1296,6 +1428,14 @@ def auto_detect_mapping(input_dir, mode="offcharge"):
             if stem.lower() in files_by_stem:
                 mapping["combined_doors"][output_name] = files_by_stem[stem.lower()]
                 break
+
+    # All-doors input (all 4 doors open — split into near/far combined)
+    all_doors_stems = (ALL_DOORS_PATTERN_ONCHARGE if mode == "oncharge"
+                       else ALL_DOORS_PATTERN_OFFCHARGE)
+    for stem in all_doors_stems:
+        if stem.lower() in files_by_stem:
+            mapping["all_doors"] = files_by_stem[stem.lower()]
+            break
 
     return mapping
 
@@ -1317,7 +1457,7 @@ def load_manifest(manifest_path):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def process_all(input_dir, output_dir, reference_dir=None, manifest_path=None,
-                mode="offcharge", verbose=False):
+                mode="offcharge", verbose=False, full_res=False):
     """Run the full processing pipeline."""
     input_dir = Path(input_dir)
     output_dir = Path(output_dir)
@@ -1366,12 +1506,15 @@ def process_all(input_dir, output_dir, reference_dir=None, manifest_path=None,
     side_views = mapping.get("side_views", {})
     combined_views = mapping.get("combined", {})
     combined_doors = mapping.get("combined_doors", {})
+    all_doors_file = mapping.get("all_doors")
     all_bounds = {}
     first_img_shape = None
     max_battery_bottom = 0
 
-    # Include combined-state and combined-door images in bounds detection
+    # Include combined-state, combined-door, and all-doors images in bounds detection
     all_side_inputs = {**side_views, **combined_views, **combined_doors}
+    if all_doors_file:
+        all_side_inputs["all-doors"] = all_doors_file
 
     if all_side_inputs:
         print("Pass 1: Detecting car bounds for all side views...")
@@ -1438,7 +1581,8 @@ def process_all(input_dir, output_dir, reference_dir=None, manifest_path=None,
                 continue
 
             print(f"  {filename} -> {name}.png")
-            result, info = process_sideview(src_path, crop_frame, verbose=verbose)
+            result, info = process_sideview(src_path, crop_frame, verbose=verbose,
+                                            full_res=full_res)
 
             if result is not None:
                 if result.mode != "RGBA":
@@ -1466,7 +1610,8 @@ def process_all(input_dir, output_dir, reference_dir=None, manifest_path=None,
                 continue
 
             print(f"  {filename} -> {name}.png (combined)")
-            result, info = process_sideview(src_path, crop_frame, verbose=verbose)
+            result, info = process_sideview(src_path, crop_frame, verbose=verbose,
+                                            full_res=full_res)
 
             if result is not None:
                 if result.mode != "RGBA":
@@ -1485,7 +1630,8 @@ def process_all(input_dir, output_dir, reference_dir=None, manifest_path=None,
                 continue
 
             print(f"  {filename} -> {name}.png (combined-door input)")
-            result, info = process_sideview(src_path, crop_frame, verbose=verbose)
+            result, info = process_sideview(src_path, crop_frame, verbose=verbose,
+                                            full_res=full_res)
 
             if result is not None:
                 if result.mode != "RGBA":
@@ -1497,8 +1643,41 @@ def process_all(input_dir, output_dir, reference_dir=None, manifest_path=None,
             info["output_name"] = f"{name}.png"
             report["images"].append(info)
 
+        # Process all-doors input (all 4 doors open)
+        if all_doors_file:
+            src_path = input_dir / all_doors_file
+            if src_path.exists():
+                print(f"  {all_doors_file} -> all-doors.png (all 4 doors)")
+                result, info = process_sideview(src_path, crop_frame,
+                                                verbose=verbose, full_res=full_res)
+                if result is not None:
+                    if result.mode != "RGBA":
+                        result = result.convert("RGBA")
+                    out_path = output_dir / "all-doors.png"
+                    result.save(str(out_path), "PNG")
+                    processed_images["all-doors"] = result
+
     elif side_views:
         report["errors"].append("Could not detect car in any side-view screenshot")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Align all side views to base (corrects sub-pixel shifts between shots)
+    # ══════════════════════════════════════════════════════════════════════════
+    base_for_align = processed_images.get("base")
+    if base_for_align and len(processed_images) > 1:
+        print("Aligning side views to base...")
+        for name in list(processed_images.keys()):
+            if name == "base" or name in ("controls-bg", "climate-bg"):
+                continue
+            original = processed_images[name]
+            aligned = _align_to_base(original, base_for_align, verbose=verbose)
+            if aligned is not original:
+                processed_images[name] = aligned
+                out_path = output_dir / f"{name}.png"
+                aligned.save(str(out_path), "PNG")
+                if verbose:
+                    print(f"    Overwrote {name}.png (aligned)")
+        print()
 
     # ══════════════════════════════════════════════════════════════════════════
     # Pass 3: Split combined-door images into individual door overlays
@@ -1553,8 +1732,25 @@ def process_all(input_dir, output_dir, reference_dir=None, manifest_path=None,
                 if verbose:
                     print(f"    {far_out}: skipped (no significant pixels)")
 
+        # Split all-doors image into near/far halves for same-side combined
+        if "all-doors" in processed_images:
+            all_doors_img = processed_images["all-doors"]
+            print(f"  Splitting all-doors -> nf-nr-combined + ff-fr-combined")
+            near_half, far_half = split_combined_doors(
+                all_doors_img, base_img, mode=mode, verbose=verbose)
+
+            for combo_name, half in [("nf-nr-combined", near_half),
+                                     ("ff-fr-combined", far_half)]:
+                if half is not None and combo_name not in processed_images:
+                    full_img = base_img.copy()
+                    full_img.paste(half, (0, 0), half)
+                    out_path = output_dir / f"{combo_name}.png"
+                    full_img.save(str(out_path), "PNG")
+                    processed_images[combo_name] = full_img
+                    print(f"    Saved {combo_name}.png")
+
         # Derive same-side combined overlays (nf-nr-combined, ff-fr-combined)
-        # from the split door images when not already supplied as screenshots.
+        # from individual door compositing as fallback when no all-doors screenshot.
         same_side_combos = (COMBINED_PATTERNS_ONCHARGE if mode == "oncharge"
                             else COMBINED_PATTERNS_OFFCHARGE)
         for combo_name, (_stems, constituents) in same_side_combos.items():
@@ -1563,9 +1759,16 @@ def process_all(input_dir, output_dir, reference_dir=None, manifest_path=None,
             # Check if both constituent door images exist
             parts = [f"{c}-open" for c in constituents]
             if all(p in processed_images for p in parts):
-                print(f"  Compositing {combo_name} from {' + '.join(parts)}")
+                # Always composite rear door first, front door on top.
+                # The door panels don't spatially overlap — only the gap/
+                # interior regions do.  In the overlap zone, the front-door
+                # overlay correctly shows the open-front-door interior that
+                # would be visible through the rear door gap when both doors
+                # are open.  This holds for both camera angles.
+                z_ordered = list(reversed(parts))  # rear first, front on top
+                print(f"  Compositing {combo_name} from {' + '.join(z_ordered)}")
                 combo_img = base_img.copy()
-                for p in parts:
+                for p in z_ordered:
                     door_img = processed_images[p]
                     # Compute overlay vs base to get just the changed pixels
                     overlay = _compute_overlay(door_img, base_img,
@@ -1592,9 +1795,11 @@ def process_all(input_dir, output_dir, reference_dir=None, manifest_path=None,
         print(f"  {filename} -> {name}.png")
 
         if name == "controls-bg":
-            result, info = process_controls_panel(src_path, verbose=verbose)
+            result, info = process_controls_panel(src_path, verbose=verbose,
+                                                  full_res=full_res)
         elif name == "climate-bg":
-            result, info = process_climate_panel(src_path, verbose=verbose)
+            result, info = process_climate_panel(src_path, verbose=verbose,
+                                                 full_res=full_res)
         else:
             result, info = None, {"warnings": [f"Unknown panel type: {name}"],
                                   "success": False}
@@ -1649,7 +1854,7 @@ def process_all(input_dir, output_dir, reference_dir=None, manifest_path=None,
 # Offcharge is a front 3/4 view: front doors are nearest to camera.
 OFFCHARGE_OVERLAYS = ["chargeport", "frunk", "fr", "ff", "nr", "nf"]
 # Oncharge is a rear 3/4 view: rear doors are nearest to camera.
-ONCHARGE_OVERLAYS  = ["frunk", "nf", "nr", "fr"]
+ONCHARGE_OVERLAYS  = ["frunk", "ff", "fr", "nf", "nr"]
 
 DIFF_THRESHOLD = 18  # Euclidean RGB distance to count as changed pixel
 
@@ -1947,8 +2152,8 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
     Oncharge output files:
       oncharge-base.png, oncharge-trunk-open.png,
       oncharge-frunk-overlay.png, oncharge-nf-overlay.png,
-      oncharge-nr-overlay.png, oncharge-fr-overlay.png,
-      oncharge-nf-nr-combined-overlay.png
+      oncharge-nr-overlay.png, oncharge-ff-overlay.png, oncharge-fr-overlay.png,
+      oncharge-nf-nr-combined-overlay.png, oncharge-ff-fr-combined-overlay.png
     """
     processed_dir = Path(processed_dir)
     output_dir = Path(output_dir)
@@ -1993,6 +2198,22 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
         trunk_img_save.save(str(output_dir / trunk_out), "PNG")
     print(f"  Saved {base_out}" +
           (f" + {trunk_out}" if trunk_path.exists() else ""))
+
+    # Extract green charging cable into a dedicated transparent overlay.
+    # The card renders this on top of the base and applies CSS glow animation
+    # to just this element, so the glow halos around the cable only.
+    if mode == "oncharge":
+        base_arr = np.array(base_img)
+        rgb_f = base_arr[:, :, :3].astype(np.float64)
+        cable_mask = ((rgb_f[:, :, 1] > 80) &
+                      (rgb_f[:, :, 1] > rgb_f[:, :, 0] + 30) &
+                      (rgb_f[:, :, 1] > rgb_f[:, :, 2] + 15))
+        if np.any(cable_mask):
+            cable_rgba = np.zeros_like(base_arr)
+            cable_rgba[cable_mask] = base_arr[cable_mask]
+            cable_img = Image.fromarray(cable_rgba)
+            cable_img.save(str(output_dir / "oncharge-cable-overlay.png"), "PNG")
+            print(f"  Saved oncharge-cable-overlay.png")
 
     overlays_list = (ONCHARGE_OVERLAYS if mode == "oncharge"
                      else OFFCHARGE_OVERLAYS)
@@ -2061,9 +2282,8 @@ def generate_combo_states(processed_dir, output_dir, mode="offcharge",
 
     For offcharge: 7 binary toggles (chargeport, trunk, frunk, fr, ff, nr, nf)
         → 128 combos.  Trunk swaps the base image entirely.
-    For oncharge: 5 binary toggles (trunk, frunk, nf, nr, fr)
-        → 32 combos.  Base is the on-charge closed image.
-        ff (far-front) is not visible in the rear 3/4 oncharge view.
+    For oncharge: 6 binary toggles (trunk, frunk, ff, fr, nr, nf)
+        → 64 combos.  Base is the on-charge closed image.
 
     Trunk is handled by using trunk-open as the base image (not an overlay
     diff), because the trunk changes the car silhouette dramatically and a
@@ -2233,6 +2453,8 @@ def main():
                         help="Generate all combo state images from processed output")
     parser.add_argument("--generate-overlays", action="store_true",
                         help="Generate transparent overlay PNGs for runtime compositing")
+    parser.add_argument("--full-res", action="store_true",
+                        help="Output at native crop resolution (skip final resize)")
     args = parser.parse_args()
 
     if not Path(args.input_dir).is_dir():
@@ -2251,6 +2473,7 @@ def main():
         manifest_path=args.manifest,
         mode=args.mode,
         verbose=args.verbose,
+        full_res=args.full_res,
     )
 
     elapsed = time.time() - start

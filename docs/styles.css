@@ -541,8 +541,69 @@ a:hover {
     background: var(--bg-input);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    padding: 16px;
-    min-height: 200px;
+    padding: 20px 16px;
+}
+
+/* iPhone mockup frame */
+
+.phone-mockup {
+    position: relative;
+    width: 160px;
+    flex-shrink: 0;
+    background: #1a1a1a;
+    border: 2.5px solid #3a3a3a;
+    border-radius: 32px;
+    padding: 14px 8px 16px;
+    box-shadow:
+        0 0 0 1px rgba(255,255,255,.05),
+        0 12px 40px rgba(0,0,0,.6),
+        inset 0 1px 0 rgba(255,255,255,.08);
+}
+
+.phone-notch {
+    width: 44px;
+    height: 12px;
+    background: #1a1a1a;
+    border-radius: 12px;
+    margin: 0 auto 8px;
+    border: 1px solid #333;
+    position: relative;
+}
+
+.phone-notch::after {
+    content: '';
+    position: absolute;
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: #111;
+    border: 1px solid #3a3a3a;
+    top: 2.5px;
+    right: 8px;
+}
+
+.phone-screen {
+    border-radius: 18px;
+    overflow: hidden;
+    background: #000;
+    aspect-ratio: 9 / 19.5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.phone-screen img {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+
+.phone-home-bar {
+    width: 38%;
+    height: 4px;
+    background: #555;
+    border-radius: 2px;
+    margin: 10px auto 0;
 }
 
 .upload-guide svg {
@@ -552,7 +613,7 @@ a:hover {
 
 .upload-guide-img {
     max-width: 200px;
-    max-height: 380px;
+    max-height: 400px;
     height: auto;
     border-radius: 8px;
 }
@@ -833,14 +894,8 @@ a:hover {
         margin: 0 6px;
     }
 
-    .upload-guide svg,
-    .upload-guide-img {
-        max-width: 160px;
-    }
-
     .upload-guide {
         padding: 12px;
-        min-height: 160px;
     }
 
     .upload-instructions {
@@ -849,5 +904,259 @@ a:hover {
 
     .upload-nav-btn {
         min-width: 80px;
+    }
+}
+
+/* ── Stagger animations ───────────────────────────────────────── */
+
+@keyframes stagger-in {
+    from {
+        opacity: 0;
+        transform: translateY(12px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes stagger-out {
+    from {
+        opacity: 1;
+        transform: translateY(0);
+    }
+    to {
+        opacity: 0;
+        transform: translateY(-8px);
+    }
+}
+
+@keyframes phone-in {
+    from {
+        opacity: 0;
+        transform: scale(.92) translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1) translateY(0);
+    }
+}
+
+.stagger-in {
+    animation: stagger-in .35s cubic-bezier(.22, .61, .36, 1) both;
+}
+
+.stagger-out {
+    animation: stagger-out .2s cubic-bezier(.55, .06, .68, .19) both;
+}
+
+.phone-animate-in {
+    animation: phone-in .4s cubic-bezier(.22, .61, .36, 1) both;
+}
+
+/* Step-level stagger: children animate in sequence */
+.step.stagger-children > .step-title       { animation-delay: 0ms; }
+.step.stagger-children > .step-desc        { animation-delay: 50ms; }
+.step.stagger-children > .form-group:nth-child(3) { animation-delay: 100ms; }
+.step.stagger-children > .form-group:nth-child(4) { animation-delay: 150ms; }
+.step.stagger-children > .form-group:nth-child(5) { animation-delay: 200ms; }
+.step.stagger-children > .notice           { animation-delay: 100ms; }
+.step.stagger-children > .upload-counter   { animation-delay: 80ms; }
+.step.stagger-children > .upload-wizard    { animation-delay: 120ms; }
+.step.stagger-children > .btn              { animation-delay: 250ms; }
+
+.step.stagger-children > * {
+    animation: stagger-in .35s cubic-bezier(.22, .61, .36, 1) both;
+}
+
+/* Upload wizard content stagger */
+.upload-main.stagger-content > .upload-guide        { animation-delay: 0ms; }
+.upload-main.stagger-content > .upload-instructions  { animation-delay: 80ms; }
+.upload-main.stagger-content > .upload-dropzone-area { animation-delay: 140ms; }
+.upload-main.stagger-content > .upload-nav           { animation-delay: 180ms; }
+
+.upload-main.stagger-content > * {
+    animation: stagger-in .3s cubic-bezier(.22, .61, .36, 1) both;
+}
+
+/* ── Preview modal ──────────────────────────────────────────── */
+
+.preview-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, .85);
+    backdrop-filter: blur(8px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    animation: preview-fade-in .25s ease both;
+}
+
+.preview-modal[hidden] {
+    display: none;
+}
+
+@keyframes preview-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.preview-modal-content {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    max-width: 680px;
+    width: 100%;
+    max-height: 90vh;
+    overflow-y: auto;
+    position: relative;
+    animation: preview-slide-in .3s cubic-bezier(.22, .61, .36, 1) both;
+}
+
+@keyframes preview-slide-in {
+    from {
+        opacity: 0;
+        transform: translateY(20px) scale(.97);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
+}
+
+.preview-close {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 1.1rem;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background .15s, color .15s;
+}
+
+.preview-close:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+}
+
+.preview-title {
+    font-size: 1rem;
+    font-weight: 700;
+    margin-bottom: 16px;
+}
+
+/* Mode toggle (offcharge / oncharge) */
+
+.preview-mode-toggle {
+    display: flex;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    margin-bottom: 16px;
+}
+
+.preview-mode-btn {
+    flex: 1;
+    padding: 8px 16px;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-family: var(--font);
+    font-size: .8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s, color .15s;
+}
+
+.preview-mode-btn:hover {
+    color: var(--text);
+}
+
+.preview-mode-btn.active {
+    background: var(--red);
+    color: #fff;
+}
+
+/* Car image compositing area */
+
+.preview-car {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 417 / 262;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 16px;
+}
+
+.preview-car img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+/* Toggle control buttons */
+
+.preview-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+}
+
+.preview-toggle {
+    padding: 7px 14px;
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    color: var(--text-muted);
+    font-family: var(--font);
+    font-size: .75rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s, color .15s, border-color .15s;
+    user-select: none;
+}
+
+.preview-toggle:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+}
+
+.preview-toggle.active {
+    background: var(--red-dim);
+    border-color: var(--red);
+    color: var(--red);
+}
+
+.preview-toggle:disabled {
+    opacity: .3;
+    cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .stagger-in,
+    .stagger-out,
+    .phone-animate-in,
+    .step.stagger-children > *,
+    .upload-main.stagger-content > *,
+    .preview-modal,
+    .preview-modal-content {
+        animation: none !important;
     }
 }

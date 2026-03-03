@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tesla Card — Local Testbed</title>
+    <link rel="icon" href="favicon.ico">
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        /* Testbed-specific overrides */
+        .container.container-wide { max-width: 960px; }
+
+        .log-area {
+            background: #111;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            margin-top: 16px;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            font-size: .75rem;
+            line-height: 1.6;
+            color: #aaa;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        .log-area .log-ok { color: #2ea043; }
+        .log-area .log-err { color: #e82127; }
+        .log-area .log-heading { color: #f0f0f0; font-weight: 700; }
+
+        .result-files {
+            margin-top: 16px;
+        }
+
+        .result-files h3 {
+            font-size: .9rem;
+            margin-bottom: 8px;
+        }
+
+        .result-files-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            list-style: none;
+        }
+
+        .result-files-list li {
+            font-size: .8rem;
+            background: var(--bg-input);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 4px 10px;
+            color: var(--text-muted);
+        }
+
+        .testbed-badge {
+            display: inline-block;
+            background: rgba(255, 180, 0, .15);
+            border: 1px solid rgba(255, 180, 0, .3);
+            color: #ffb400;
+            font-size: .65rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: .08em;
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin-left: 8px;
+            vertical-align: middle;
+        }
+
+        .progress-bar-wrap {
+            background: #222;
+            border-radius: 4px;
+            height: 6px;
+            margin-top: 8px;
+            overflow: hidden;
+        }
+
+        .progress-bar {
+            background: var(--red);
+            height: 100%;
+            width: 0%;
+            transition: width 0.3s ease;
+            border-radius: 4px;
+        }
+
+        .processing-spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(255, 255, 255, .2);
+            border-top-color: var(--red);
+            border-radius: 50%;
+            animation: spin .6s linear infinite;
+            vertical-align: middle;
+            margin-right: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container" id="app-container">
+        <header class="header">
+            <h1 class="header-title">Tesla Card — Local Testbed<span class="testbed-badge">Local</span></h1>
+            <p class="header-sub">Upload screenshots and run the processing pipeline locally</p>
+        </header>
+
+        <nav class="stepper" aria-label="Progress">
+            <ol class="stepper-list">
+                <li class="stepper-step active" data-step="1">
+                    <span class="stepper-number">1</span>
+                    <span class="stepper-label">Select</span>
+                </li>
+                <li class="stepper-divider"></li>
+                <li class="stepper-step" data-step="2">
+                    <span class="stepper-number">2</span>
+                    <span class="stepper-label">Upload</span>
+                </li>
+                <li class="stepper-divider"></li>
+                <li class="stepper-step" data-step="3">
+                    <span class="stepper-number">3</span>
+                    <span class="stepper-label">Process</span>
+                </li>
+            </ol>
+        </nav>
+
+        <!-- Step 1: Select combination -->
+        <section id="step-1" class="step">
+            <h2 class="step-title">Select your Tesla</h2>
+            <p class="step-desc">Choose the model, variant, and colour to process.</p>
+
+            <div class="form-group">
+                <label for="select-model" class="form-label">Model</label>
+                <select id="select-model" class="form-select" disabled>
+                    <option value="">Loading...</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="select-variant" class="form-label">Variant</label>
+                <select id="select-variant" class="form-select" disabled>
+                    <option value="">Select a model first</option>
+                </select>
+            </div>
+
+            <div class="form-group">
+                <label for="select-colour" class="form-label">Colour</label>
+                <select id="select-colour" class="form-select" disabled>
+                    <option value="">Select a variant first</option>
+                </select>
+            </div>
+
+            <div id="colour-status-msg" class="status-msg" hidden></div>
+            <div id="colour-reset-wrap" hidden>
+                <button id="btn-reset-status" class="btn-link" style="font-size: .8rem;">Clear (dev)</button>
+            </div>
+
+            <button id="btn-to-upload" class="btn btn-primary" disabled>Continue to Upload</button>
+
+            <!-- Branch review section -->
+            <div id="branch-review-section" hidden style="margin-top: 32px; padding-top: 24px; border-top: 1px solid var(--border);">
+                <h3 style="font-size: .95rem; margin-bottom: 4px;">Review a submission branch</h3>
+                <p class="step-desc" style="margin-bottom: 12px;">Preview and promote processed images from a <code>submissions/*</code> git branch.</p>
+
+                <div class="form-group" style="margin-bottom: 12px;">
+                    <label for="select-branch" class="form-label">Branch</label>
+                    <select id="select-branch" class="form-select">
+                        <option value="">Choose a branch...</option>
+                    </select>
+                </div>
+
+                <div style="display: flex; gap: 8px;">
+                    <button id="btn-review-preview" class="btn btn-secondary" disabled>Preview</button>
+                    <button id="btn-review-promote" class="btn btn-primary" disabled>Promote to card repo</button>
+                    <button id="btn-review-delete" class="btn btn-secondary" disabled style="color: var(--red); border-color: var(--red);">Delete branch</button>
+                </div>
+                <div id="review-promote-msg" class="status-msg" hidden style="margin-top: 8px;"></div>
+            </div>
+        </section>
+
+        <!-- Step 2: Upload images -->
+        <section id="step-2" class="step" hidden>
+            <h2 class="step-title">Upload screenshots</h2>
+            <p class="step-desc">Take 15 screenshots from the Tesla app for
+                <strong id="upload-combo-label"></strong> — 9 unplugged and 6 on charge.</p>
+
+            <div class="notice notice-info upload-tips">
+                <p><strong>Before you start:</strong></p>
+                <ul>
+                    <li>Wait for <strong>all animations to finish</strong> before taking each screenshot</li>
+                    <li>Turn <strong>climate control OFF</strong> before the climate screenshot</li>
+                    <li>Use your phone's built-in screenshot function (not a camera photo)</li>
+                </ul>
+            </div>
+
+            <div class="upload-counter" id="upload-counter">0 of 13 screenshots uploaded</div>
+
+            <div class="upload-wizard" id="upload-wizard">
+                <nav class="upload-sidebar" id="upload-sidebar">
+                    <ol class="upload-sidebar-list" id="upload-sidebar-list"></ol>
+                </nav>
+
+                <div class="upload-main">
+                    <div class="upload-guide" id="upload-guide"></div>
+                    <div class="upload-instructions" id="upload-instructions"></div>
+                    <div class="upload-dropzone-area" id="upload-dropzone-area"></div>
+                    <div class="upload-nav">
+                        <button class="btn btn-secondary upload-nav-btn" id="btn-upload-prev" type="button">Back</button>
+                        <span class="upload-nav-indicator" id="upload-nav-indicator">1 / 13</span>
+                        <button class="btn btn-primary upload-nav-btn" id="btn-upload-next" type="button">Next</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="upload-error" class="error-text" hidden></div>
+
+            <button id="btn-submit" class="btn btn-primary" disabled>Submit &amp; Process</button>
+            <button id="btn-back-to-step1" class="btn btn-secondary">Back</button>
+        </section>
+
+        <!-- Step 3: Processing results -->
+        <section id="step-3" class="step" hidden>
+            <h2 class="step-title">Processing</h2>
+            <p class="step-desc" id="process-desc">Submitting files and running the pipeline...</p>
+
+            <div id="process-status">
+                <p><span class="processing-spinner" id="process-spinner"></span>
+                   <span id="process-status-text">Uploading files...</span></p>
+                <div class="progress-bar-wrap" id="progress-bar-wrap" hidden>
+                    <div class="progress-bar" id="progress-bar"></div>
+                </div>
+            </div>
+
+            <div class="log-area" id="log-area"></div>
+
+            <div id="process-result" hidden>
+                <div class="result-files" id="result-offcharge" hidden>
+                    <h3>Offcharge output</h3>
+                    <p class="step-desc" id="result-offcharge-path"></p>
+                </div>
+                <div class="result-files" id="result-oncharge" hidden>
+                    <h3>On-charge output</h3>
+                    <p class="step-desc" id="result-oncharge-path"></p>
+                </div>
+            </div>
+
+            <div id="action-buttons" hidden style="margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap;">
+                <button id="btn-preview" class="btn btn-secondary" style="flex: 1; min-width: 140px; margin-top: 0;">Preview processed images</button>
+                <button id="btn-promote" class="btn btn-primary" style="flex: 1; min-width: 140px; margin-top: 0;">Promote to card repo</button>
+            </div>
+            <div id="promote-msg" class="status-msg complete" hidden></div>
+
+            <button id="btn-retry" class="btn btn-primary" style="margin-top: 16px;" hidden>Delete branch &amp; retry</button>
+            <button id="btn-start-over" class="btn btn-secondary" style="margin-top: 16px;">Start over</button>
+        </section>
+
+        <footer class="footer">
+            <p>Local testbed &middot; not for production use</p>
+        </footer>
+    </div>
+
+    <!-- Preview Modal -->
+    <div id="preview-modal" class="preview-modal" hidden>
+        <div class="preview-modal-content">
+            <button class="preview-close" id="preview-close" title="Close">&times;</button>
+            <h3 class="preview-title" id="preview-title">Preview</h3>
+
+            <div class="preview-mode-toggle" id="preview-mode-toggle">
+                <button class="preview-mode-btn active" data-mode="offcharge">Offcharge</button>
+                <button class="preview-mode-btn" data-mode="oncharge">On-charge</button>
+            </div>
+
+            <div class="preview-car" id="preview-car"></div>
+
+            <div class="preview-controls" id="preview-controls"></div>
+        </div>
+    </div>
+
+    <script src="testbed.js"></script>
+</body>
+</html>

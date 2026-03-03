@@ -17,6 +17,12 @@ jobs:
           ref: main
           token: ${{ secrets.GH_BOT_TOKEN }}
 
+      - name: Fetch models.json from card repo
+        run: |
+          curl -sL "https://raw.githubusercontent.com/ds2000/homeassistant-fe-tesla/main/models.json" \
+            -o models.json
+          echo "Fetched models.json"
+
       - name: Parse branch name
         id: parse
         run: |
@@ -25,26 +31,27 @@ jobs:
           DIR_NAME="${BRANCH#submissions/}"
           echo "Parsing branch: $BRANCH (dir_name: $DIR_NAME)"
 
-          # Match model and year against status.json keys (same strategy as process-submission)
+          # Parse using models.json: try each model ID as prefix, then each variant ID
           FOUND=false
 
-          for MODEL in $(jq -r '.models | keys[]' status.json); do
+          for MODEL in $(jq -r '.models[].id' models.json); do
             if [[ "$DIR_NAME" == "${MODEL}-"* ]]; then
               REMAINDER="${DIR_NAME#${MODEL}-}"
 
-              for YEAR in $(jq -r --arg m "$MODEL" '.models[$m].years | keys[]' status.json); do
-                if [[ "$REMAINDER" == "${YEAR}-"* ]]; then
-                  COLOUR_AND_TOKEN="${REMAINDER#${YEAR}-}"
+              for VARIANT in $(jq -r --arg m "$MODEL" '.models[] | select(.id == $m) | .variants[].id' models.json); do
+                if [[ "$REMAINDER" == "${VARIANT}-"* ]]; then
+                  COLOUR_AND_TOKEN="${REMAINDER#${VARIANT}-}"
                   # Colour is everything except the last -XXXX (4-char hex token)
                   COLOUR=$(echo "$COLOUR_AND_TOKEN" | sed 's/-[0-9a-f]\{4\}$//')
 
-                  # Verify this colour exists in status.json
-                  if jq -e --arg m "$MODEL" --arg y "$YEAR" --arg c "$COLOUR" \
-                    '.models[$m].years[$y].colours[$c]' status.json > /dev/null 2>&1; then
+                  # Verify this colour exists in models.json
+                  if jq -e --arg m "$MODEL" --arg v "$VARIANT" --arg c "$COLOUR" \
+                    '.models[] | select(.id == $m) | .variants[] | select(.id == $v) | .colours[] | select(.id == $c)' \
+                    models.json > /dev/null 2>&1; then
                     echo "model=$MODEL" >> "$GITHUB_OUTPUT"
-                    echo "year=$YEAR" >> "$GITHUB_OUTPUT"
+                    echo "variant=$VARIANT" >> "$GITHUB_OUTPUT"
                     echo "colour=$COLOUR" >> "$GITHUB_OUTPUT"
-                    echo "Parsed: model=$MODEL year=$YEAR colour=$COLOUR"
+                    echo "Parsed: model=$MODEL variant=$VARIANT colour=$COLOUR"
                     FOUND=true
                     break 2
                   fi
@@ -54,29 +61,28 @@ jobs:
           done
 
           if [ "$FOUND" != "true" ]; then
-            echo "::warning::Could not parse model/year/colour from branch: $BRANCH"
+            echo "::warning::Could not parse model/variant/colour from branch: $BRANCH"
             exit 1
           fi
 
       - name: Update status.json
         run: |
           MODEL="${{ steps.parse.outputs.model }}"
-          YEAR="${{ steps.parse.outputs.year }}"
+          VARIANT="${{ steps.parse.outputs.variant }}"
           COLOUR="${{ steps.parse.outputs.colour }}"
           MERGED="${{ github.event.pull_request.merged }}"
+          STATUS_KEY="${MODEL}/${VARIANT}/${COLOUR}"
 
           if [ "$MERGED" = "true" ]; then
             echo "PR merged — setting status to complete"
-            jq --arg m "$MODEL" --arg y "$YEAR" --arg c "$COLOUR" \
-              '.models[$m].years[$y].colours[$c] = {"status": "complete", "pr": null}' \
+            jq --arg key "$STATUS_KEY" \
+              '.[$key] = {"status": "complete"}' \
               status.json > status_updated.json
-            STATUS_WORD="complete"
           else
-            echo "PR closed without merge — setting status to available"
-            jq --arg m "$MODEL" --arg y "$YEAR" --arg c "$COLOUR" \
-              '.models[$m].years[$y].colours[$c] = {"status": "available", "pr": null}' \
+            echo "PR closed without merge — removing pending status"
+            jq --arg key "$STATUS_KEY" \
+              'del(.[$key])' \
               status.json > status_updated.json
-            STATUS_WORD="available"
           fi
 
           mv status_updated.json status.json
@@ -84,9 +90,10 @@ jobs:
       - name: Commit and push
         run: |
           MODEL="${{ steps.parse.outputs.model }}"
-          YEAR="${{ steps.parse.outputs.year }}"
+          VARIANT="${{ steps.parse.outputs.variant }}"
           COLOUR="${{ steps.parse.outputs.colour }}"
           PR_NUMBER="${{ github.event.pull_request.number }}"
+          STATUS_KEY="${MODEL}/${VARIANT}/${COLOUR}"
 
           git add status.json
           git diff --cached --quiet && echo "No changes to status.json — skipping commit" && exit 0
@@ -96,9 +103,9 @@ jobs:
 
           MERGED="${{ github.event.pull_request.merged }}"
           if [ "$MERGED" = "true" ]; then
-            MSG="status: mark ${MODEL} ${YEAR} ${COLOUR} as complete (PR #${PR_NUMBER} merged)"
+            MSG="status: mark ${STATUS_KEY} as complete (PR #${PR_NUMBER} merged)"
           else
-            MSG="status: mark ${MODEL} ${YEAR} ${COLOUR} as available (PR #${PR_NUMBER} closed)"
+            MSG="status: mark ${STATUS_KEY} as available (PR #${PR_NUMBER} closed)"
           fi
 
           git commit -m "$MSG"

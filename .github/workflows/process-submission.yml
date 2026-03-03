@@ -34,38 +34,42 @@ jobs:
           echo "submission_dir=$SUBMISSION_DIR" >> "$GITHUB_OUTPUT"
           echo "Found submission directory: $SUBMISSION_DIR"
 
-          # Extract directory name (e.g. model3-2017-2024-pearl_white_multi_coat)
+          # Extract directory name (e.g. 3-3.1-red_multi_coat)
           DIR_NAME=$(basename "$SUBMISSION_DIR")
           echo "dir_name=$DIR_NAME" >> "$GITHUB_OUTPUT"
 
-      - name: Parse model, year, and colour from submission
+      - name: Fetch models.json from card repo
+        run: |
+          curl -sL "https://raw.githubusercontent.com/ds2000/homeassistant-fe-tesla/main/models.json" \
+            -o models.json
+          echo "Fetched models.json"
+
+      - name: Parse model, variant, and colour from submission
         id: parse
         run: |
           DIR_NAME="${{ steps.detect.outputs.dir_name }}"
 
-          # Read all model keys and year keys from status.json to do unambiguous parsing
-          # Strategy: try each model key as a prefix, then each year key for that model,
-          # and the remainder (minus trailing -token) is the colour
+          # Parse using models.json: try each model ID as prefix, then each variant ID
           FOUND=false
 
-          for MODEL in $(jq -r '.models | keys[]' status.json); do
-            # Check if dir name starts with this model
+          for MODEL in $(jq -r '.models[].id' models.json); do
             if [[ "$DIR_NAME" == "${MODEL}-"* ]]; then
               REMAINDER="${DIR_NAME#${MODEL}-}"
 
-              for YEAR in $(jq -r --arg m "$MODEL" '.models[$m].years | keys[]' status.json); do
-                if [[ "$REMAINDER" == "${YEAR}-"* ]]; then
-                  COLOUR_AND_TOKEN="${REMAINDER#${YEAR}-}"
+              for VARIANT in $(jq -r --arg m "$MODEL" '.models[] | select(.id == $m) | .variants[].id' models.json); do
+                if [[ "$REMAINDER" == "${VARIANT}-"* ]]; then
+                  COLOUR_AND_TOKEN="${REMAINDER#${VARIANT}-}"
                   # Colour is everything except the last -XXXX (4-char hex token)
                   COLOUR=$(echo "$COLOUR_AND_TOKEN" | sed 's/-[0-9a-f]\{4\}$//')
 
-                  # Verify this colour exists in status.json
-                  if jq -e --arg m "$MODEL" --arg y "$YEAR" --arg c "$COLOUR" \
-                    '.models[$m].years[$y].colours[$c]' status.json > /dev/null 2>&1; then
+                  # Verify this colour exists in models.json
+                  if jq -e --arg m "$MODEL" --arg v "$VARIANT" --arg c "$COLOUR" \
+                    '.models[] | select(.id == $m) | .variants[] | select(.id == $v) | .colours[] | select(.id == $c)' \
+                    models.json > /dev/null 2>&1; then
                     echo "model=$MODEL" >> "$GITHUB_OUTPUT"
-                    echo "year=$YEAR" >> "$GITHUB_OUTPUT"
+                    echo "variant=$VARIANT" >> "$GITHUB_OUTPUT"
                     echo "colour=$COLOUR" >> "$GITHUB_OUTPUT"
-                    echo "Parsed: model=$MODEL year=$YEAR colour=$COLOUR"
+                    echo "Parsed: model=$MODEL variant=$VARIANT colour=$COLOUR"
                     FOUND=true
                     break 2
                   fi
@@ -75,7 +79,7 @@ jobs:
           done
 
           if [ "$FOUND" != "true" ]; then
-            echo "::error::Could not parse model/year/colour from directory name: $DIR_NAME"
+            echo "::error::Could not parse model/variant/colour from directory name: $DIR_NAME"
             exit 1
           fi
 
@@ -85,7 +89,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python dependencies
-        run: pip install opencv-python-headless numpy
+        run: pip install opencv-python-headless numpy Pillow
 
       - name: Run validation
         id: validate
@@ -105,6 +109,26 @@ jobs:
 
           # Store report for PR body
           cat validation_report.json
+
+      - name: Process screenshots (offcharge)
+        if: steps.validate.outputs.validation_passed == 'true'
+        run: |
+          python scripts/process_screenshots.py \
+            --input-dir "${{ steps.detect.outputs.submission_dir }}" \
+            --output-dir processed/offcharge/ \
+            --mode offcharge \
+            --generate-overlays \
+            --verbose
+
+      - name: Process screenshots (oncharge)
+        if: steps.validate.outputs.validation_passed == 'true'
+        run: |
+          python scripts/process_screenshots.py \
+            --input-dir "${{ steps.detect.outputs.submission_dir }}" \
+            --output-dir processed/oncharge/ \
+            --mode oncharge \
+            --generate-overlays \
+            --verbose
 
       - name: Run alignment
         id: align
@@ -153,26 +177,29 @@ jobs:
             echo "skipped=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Read display labels
+      - name: Read display labels from models.json
         id: labels
         run: |
           MODEL="${{ steps.parse.outputs.model }}"
-          YEAR="${{ steps.parse.outputs.year }}"
+          VARIANT="${{ steps.parse.outputs.variant }}"
           COLOUR="${{ steps.parse.outputs.colour }}"
 
-          MODEL_LABEL=$(jq -r --arg m "$MODEL" '.models[$m].label' status.json)
-          YEAR_LABEL=$(jq -r --arg m "$MODEL" --arg y "$YEAR" '.models[$m].years[$y].label' status.json)
-          COLOUR_LABEL=$(echo "$COLOUR" | sed 's/_/ /g; s/\b\(.\)/\u\1/g')
+          MODEL_LABEL=$(jq -r --arg m "$MODEL" \
+            '.models[] | select(.id == $m) | .name' models.json)
+          VARIANT_LABEL=$(jq -r --arg m "$MODEL" --arg v "$VARIANT" \
+            '.models[] | select(.id == $m) | .variants[] | select(.id == $v) | .label' models.json)
+          COLOUR_LABEL=$(jq -r --arg m "$MODEL" --arg v "$VARIANT" --arg c "$COLOUR" \
+            '.models[] | select(.id == $m) | .variants[] | select(.id == $v) | .colours[] | select(.id == $c) | .name' models.json)
 
           echo "model_label=$MODEL_LABEL" >> "$GITHUB_OUTPUT"
-          echo "year_label=$YEAR_LABEL" >> "$GITHUB_OUTPUT"
+          echo "variant_label=$VARIANT_LABEL" >> "$GITHUB_OUTPUT"
           echo "colour_label=$COLOUR_LABEL" >> "$GITHUB_OUTPUT"
 
       - name: Build PR body
         id: pr_body
         run: |
           MODEL_LABEL="${{ steps.labels.outputs.model_label }}"
-          YEAR_LABEL="${{ steps.labels.outputs.year_label }}"
+          VARIANT_LABEL="${{ steps.labels.outputs.variant_label }}"
           COLOUR_LABEL="${{ steps.labels.outputs.colour_label }}"
           VALIDATION_PASSED="${{ steps.validate.outputs.validation_passed }}"
 
@@ -196,7 +223,7 @@ jobs:
 
           # Write PR body to file using heredoc
           cat > pr_body.md <<PREOF
-          ## Submission: ${MODEL_LABEL} ${YEAR_LABEL} — ${COLOUR_LABEL}
+          ## Submission: ${MODEL_LABEL} ${VARIANT_LABEL} — ${COLOUR_LABEL}
 
           ### Validation
           $(if [ "$VALIDATION_PASSED" = "true" ]; then
@@ -223,14 +250,14 @@ jobs:
         id: create_pr
         run: |
           MODEL_LABEL="${{ steps.labels.outputs.model_label }}"
-          YEAR_LABEL="${{ steps.labels.outputs.year_label }}"
+          VARIANT_LABEL="${{ steps.labels.outputs.variant_label }}"
           COLOUR_LABEL="${{ steps.labels.outputs.colour_label }}"
           VALIDATION_PASSED="${{ steps.validate.outputs.validation_passed }}"
 
           if [ "$VALIDATION_PASSED" = "true" ]; then
-            TITLE="submission: ${MODEL_LABEL} ${YEAR_LABEL} — ${COLOUR_LABEL}"
+            TITLE="submission: ${MODEL_LABEL} ${VARIANT_LABEL} — ${COLOUR_LABEL}"
           else
-            TITLE="[needs fixes] submission: ${MODEL_LABEL} ${YEAR_LABEL} — ${COLOUR_LABEL}"
+            TITLE="[needs fixes] submission: ${MODEL_LABEL} ${VARIANT_LABEL} — ${COLOUR_LABEL}"
           fi
 
           PR_URL=$(gh pr create \
@@ -247,16 +274,17 @@ jobs:
       - name: Update status.json to pending
         run: |
           MODEL="${{ steps.parse.outputs.model }}"
-          YEAR="${{ steps.parse.outputs.year }}"
+          VARIANT="${{ steps.parse.outputs.variant }}"
           COLOUR="${{ steps.parse.outputs.colour }}"
           PR_NUMBER="${{ steps.create_pr.outputs.pr_number }}"
+          STATUS_KEY="${MODEL}/${VARIANT}/${COLOUR}"
 
           # Checkout main to update status.json
           git checkout main
 
-          # Update status.json using jq
-          jq --arg m "$MODEL" --arg y "$YEAR" --arg c "$COLOUR" --argjson pr "$PR_NUMBER" \
-            '.models[$m].years[$y].colours[$c] = {"status": "pending", "pr": $pr}' \
+          # Update status.json using flat key format
+          jq --arg key "$STATUS_KEY" --argjson pr "$PR_NUMBER" \
+            '.[$key] = {"status": "pending", "pr": $pr}' \
             status.json > status_updated.json
           mv status_updated.json status.json
 
@@ -265,5 +293,5 @@ jobs:
           git diff --cached --quiet && echo "No changes to commit" && exit 0
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git commit -m "status: mark ${MODEL} ${YEAR} ${COLOUR} as pending (PR #${PR_NUMBER})"
+          git commit -m "status: mark ${STATUS_KEY} as pending (PR #${PR_NUMBER})"
           git push origin main
