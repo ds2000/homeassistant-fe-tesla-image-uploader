@@ -227,7 +227,7 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
 
     function getStatus(modelId, variantId, colourId) {
         var key = modelId + '/' + variantId + '/' + colourId;
-        if (statusData[key]) return statusData[key];
+        if (statusData && statusData[key]) return statusData[key];
         // Check models.json hasImages flag — if true, card already has images
         var c = findColour(modelId, variantId, colourId);
         if (c && c.hasImages) return { status: 'complete' };
@@ -238,7 +238,7 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
     function refreshStatus() {
         return Promise.all([
             fetch(cacheBust(MODELS_URL)).then(function (r) { return r.ok ? r.json() : modelsData; }),
-            fetch(cacheBust(statusUrl)).then(function (r) { return r.ok ? r.json() : statusData; }),
+            fetch(cacheBust(statusUrl)).then(function (r) { return r.ok ? r.json() : {}; }),
             // List open submission branches to catch in-flight submissions
             ghApi('GET', '/repos/' + REPO + '/git/matching-refs/heads/submissions/')
                 .then(function (refs) { return Array.isArray(refs) ? refs : []; })
