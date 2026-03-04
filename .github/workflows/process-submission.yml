@@ -176,6 +176,17 @@ jobs:
           COLOUR_LABEL: ${{ steps.labels.outputs.colour_label }}
           HEAD_REF: ${{ github.ref_name }}
         run: |
+          # Skip if PR already exists for this branch (re-triggered by processed commit push)
+          EXISTING=$(gh pr list --head "$HEAD_REF" --base TESUPL0001 --json number,url --jq '.[0]' 2>/dev/null || echo "")
+          if [ -n "$EXISTING" ]; then
+            PR_NUMBER=$(echo "$EXISTING" | jq -r '.number')
+            PR_URL=$(echo "$EXISTING" | jq -r '.url')
+            echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+            echo "PR already exists: #${PR_NUMBER} — skipping creation"
+            exit 0
+          fi
+
           TITLE="submission: ${MODEL_LABEL} ${VARIANT_LABEL} — ${COLOUR_LABEL}"
 
           PR_URL=$(gh pr create \
