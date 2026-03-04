@@ -25,8 +25,8 @@ jobs:
       - name: Detect submission directory
         id: detect
         run: |
-          # Find the submission directory (there should be exactly one under submissions/)
-          SUBMISSION_DIR=$(find submissions/ -mindepth 1 -maxdepth 1 -type d | head -n1)
+          # Find the submission directory (nested: submissions/{model}/{variant}/{colour}/)
+          SUBMISSION_DIR=$(find submissions/ -mindepth 3 -maxdepth 3 -type d | head -n1)
           if [ -z "$SUBMISSION_DIR" ]; then
             echo "::error::No submission directory found under submissions/"
             exit 1
@@ -34,54 +34,20 @@ jobs:
           echo "submission_dir=$SUBMISSION_DIR" >> "$GITHUB_OUTPUT"
           echo "Found submission directory: $SUBMISSION_DIR"
 
-          # Extract directory name (e.g. 3-3.1-red_multi_coat)
-          DIR_NAME=$(basename "$SUBMISSION_DIR")
-          echo "dir_name=$DIR_NAME" >> "$GITHUB_OUTPUT"
+          # Parse model/variant/colour directly from path segments
+          MODEL=$(echo "$SUBMISSION_DIR" | cut -d/ -f2)
+          VARIANT=$(echo "$SUBMISSION_DIR" | cut -d/ -f3)
+          COLOUR=$(echo "$SUBMISSION_DIR" | cut -d/ -f4)
+          echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+          echo "variant=$VARIANT" >> "$GITHUB_OUTPUT"
+          echo "colour=$COLOUR" >> "$GITHUB_OUTPUT"
+          echo "Parsed: model=$MODEL variant=$VARIANT colour=$COLOUR"
 
       - name: Fetch models.json from card repo
         run: |
           curl -sL "https://raw.githubusercontent.com/ds2000/homeassistant-fe-tesla/feature/tefe0001/models.json" \
             -o models.json
           echo "Fetched models.json"
-
-      - name: Parse model, variant, and colour from submission
-        id: parse
-        env:
-          DIR_NAME: ${{ steps.detect.outputs.dir_name }}
-        run: |
-          # Parse using models.json: try each model ID as prefix, then each variant ID
-          FOUND=false
-
-          for MODEL in $(jq -r '.models[].id' models.json); do
-            if [[ "$DIR_NAME" == "${MODEL}-"* ]]; then
-              REMAINDER="${DIR_NAME#${MODEL}-}"
-
-              for VARIANT in $(jq -r --arg m "$MODEL" '.models[] | select(.id == $m) | .variants[].id' models.json); do
-                if [[ "$REMAINDER" == "${VARIANT}-"* ]]; then
-                  COLOUR_AND_TOKEN="${REMAINDER#${VARIANT}-}"
-                  # Colour is everything except the last -XXXX (4-char hex token)
-                  COLOUR=$(echo "$COLOUR_AND_TOKEN" | sed 's/-[0-9a-f]\{4\}$//')
-
-                  # Verify this colour exists in models.json
-                  if jq -e --arg m "$MODEL" --arg v "$VARIANT" --arg c "$COLOUR" \
-                    '.models[] | select(.id == $m) | .variants[] | select(.id == $v) | .colours[] | select(.id == $c)' \
-                    models.json > /dev/null 2>&1; then
-                    echo "model=$MODEL" >> "$GITHUB_OUTPUT"
-                    echo "variant=$VARIANT" >> "$GITHUB_OUTPUT"
-                    echo "colour=$COLOUR" >> "$GITHUB_OUTPUT"
-                    echo "Parsed: model=$MODEL variant=$VARIANT colour=$COLOUR"
-                    FOUND=true
-                    break 2
-                  fi
-                fi
-              done
-            fi
-          done
-
-          if [ "$FOUND" != "true" ]; then
-            echo "::error::Could not parse model/variant/colour from directory name: $DIR_NAME"
-            exit 1
-          fi
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -199,9 +165,9 @@ jobs:
       - name: Read display labels from models.json
         id: labels
         env:
-          MODEL: ${{ steps.parse.outputs.model }}
-          VARIANT: ${{ steps.parse.outputs.variant }}
-          COLOUR: ${{ steps.parse.outputs.colour }}
+          MODEL: ${{ steps.detect.outputs.model }}
+          VARIANT: ${{ steps.detect.outputs.variant }}
+          COLOUR: ${{ steps.detect.outputs.colour }}
         run: |
           MODEL_LABEL=$(jq -r --arg m "$MODEL" \
             '.models[] | select(.id == $m) | .name' models.json)
@@ -299,9 +265,9 @@ jobs:
 
       - name: Update status.json to pending
         env:
-          MODEL: ${{ steps.parse.outputs.model }}
-          VARIANT: ${{ steps.parse.outputs.variant }}
-          COLOUR: ${{ steps.parse.outputs.colour }}
+          MODEL: ${{ steps.detect.outputs.model }}
+          VARIANT: ${{ steps.detect.outputs.variant }}
+          COLOUR: ${{ steps.detect.outputs.colour }}
           PR_NUMBER: ${{ steps.create_pr.outputs.pr_number }}
         run: |
           STATUS_KEY="${MODEL}/${VARIANT}/${COLOUR}"

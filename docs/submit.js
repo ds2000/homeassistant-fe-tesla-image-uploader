@@ -1102,7 +1102,7 @@ function ghApi(method, path, body) {
         var shortToken = Array.from(crypto.getRandomValues(new Uint8Array(2)))
             .map(function (b) { return b.toString(16).padStart(2, '0'); }).join('');
         var branchName = 'submissions/' + model + '-' + variant + '-' + colour + '-' + shortToken;
-        var dirPath = 'submissions/' + model + '-' + variant + '-' + colour + '/';
+        var dirPath = 'submissions/' + model + '/' + variant + '/' + colour + '/';
 
         try {
             hideUploadError();
