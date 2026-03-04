@@ -208,6 +208,7 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
     var selection = { model: '', variant: '', colour: '' };
     var verificationToken = '';
     var uploadedFiles = {};
+    var uploadCableFlags = {}; // layerKey → true/false (detected from ORIGINAL screenshot before crop)
     var currentLayerIndex = 0;
     var layerDOMCache = {};
     var lastContinueClick = 0;
@@ -959,6 +960,12 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
 
             hideUploadError();
 
+            // Detect charging indicators on the ORIGINAL full screenshot
+            // (before crop removes UI elements like lightning bolts, "Charging" text)
+            detectChargingCable(file).then(function (hasCable) {
+                uploadCableFlags[layerKey] = hasCable;
+            });
+
             // Auto-crop: remove phone status bar + app UI below the car
             cropScreenshot(file, function (croppedFile) {
                 uploadedFiles[layerKey] = croppedFile;
@@ -982,6 +989,7 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
 
     function removeFileWizard(layerKey, dropzone, emptyState, thumbWrap, thumb, fileInput) {
         delete uploadedFiles[layerKey];
+        delete uploadCableFlags[layerKey];
 
         if (thumb.dataset.objectUrl) {
             URL.revokeObjectURL(thumb.dataset.objectUrl);
@@ -1047,11 +1055,11 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
                 var total = canvas.width * canvas.height;
                 for (var i = 0; i < data.length; i += 4) {
                     var r = data[i], g = data[i + 1], b = data[i + 2];
-                    if (g > 80 && g > r + 30 && g > b + 15) greenCount++;
+                    if (g > 60 && g > r + 15 && g > b + 10) greenCount++;
                 }
                 URL.revokeObjectURL(img.src);
-                // Cable typically covers >0.5% of pixels
-                resolve(greenCount / total > 0.005);
+                // Full screenshot: cable + lightning icons + "Charge Tip" text ≈ 0.1%+
+                resolve(greenCount / total > 0.001);
             };
             img.onerror = function () {
                 URL.revokeObjectURL(img.src);
@@ -1068,27 +1076,23 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
                           'oc_front_doors', 'oc_rear_doors', 'oc_all_doors'];
 
     function validateUploads() {
-        var checks = [];
+        var issues = [];
         var keys = Object.keys(uploadedFiles);
 
-        // Cable detection checks
+        // Cable detection checks (using pre-computed flags from original screenshots)
         keys.forEach(function (key) {
             var isOncharge = ONCHARGE_KEYS.indexOf(key) !== -1;
             var isOffchargeSide = OFFCHARGE_SIDE_KEYS.indexOf(key) !== -1;
             if (!isOncharge && !isOffchargeSide) return; // skip panels
-            checks.push(
-                detectChargingCable(uploadedFiles[key]).then(function (hasCable) {
-                    if (isOncharge && !hasCable) {
-                        var layer = LAYERS.filter(function (l) { return l.key === key; })[0];
-                        return { key: key, label: layer ? layer.label : key, issue: 'missing cable — is this an on-charge screenshot?' };
-                    }
-                    if (isOffchargeSide && hasCable) {
-                        var layer = LAYERS.filter(function (l) { return l.key === key; })[0];
-                        return { key: key, label: layer ? layer.label : key, issue: 'charging cable detected — this should be an unplugged screenshot' };
-                    }
-                    return null;
-                })
-            );
+            var hasCable = !!uploadCableFlags[key];
+            if (isOncharge && !hasCable) {
+                var layer = LAYERS.filter(function (l) { return l.key === key; })[0];
+                issues.push({ key: key, label: layer ? layer.label + ' (On Charge)' : key, issue: 'no charging indicators found — is this an on-charge screenshot?' });
+            }
+            if (isOffchargeSide && hasCable) {
+                var layer = LAYERS.filter(function (l) { return l.key === key; })[0];
+                issues.push({ key: key, label: layer ? layer.label + ' (Unplugged)' : key, issue: 'charging indicators detected — this should be an unplugged screenshot' });
+            }
         });
 
         // Duplicate detection via file size (quick heuristic)
@@ -1098,21 +1102,17 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
             if (!sizeMap[size]) sizeMap[size] = [];
             sizeMap[size].push(key);
         });
-        var dupeWarnings = [];
         Object.keys(sizeMap).forEach(function (size) {
             if (sizeMap[size].length > 1) {
                 var labels = sizeMap[size].map(function (k) {
                     var layer = LAYERS.filter(function (l) { return l.key === k; })[0];
                     return layer ? layer.label + ' (' + (layer.section || '') + ')' : k;
                 });
-                dupeWarnings.push({ key: sizeMap[size][0], label: labels.join(', '), issue: 'possible duplicates — same file size' });
+                issues.push({ key: sizeMap[size][0], label: labels.join(', '), issue: 'possible duplicates — same file size' });
             }
         });
 
-        return Promise.all(checks).then(function (results) {
-            var issues = results.filter(function (r) { return r !== null; });
-            return issues.concat(dupeWarnings);
-        });
+        return Promise.resolve(issues);
     }
 
     function showUploadSuccess(branchName) {
@@ -1126,6 +1126,7 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
 
     function resetUploadState() {
         uploadedFiles = {};
+        uploadCableFlags = {};
         layerDOMCache = {};
         currentLayerIndex = 0;
         $uploadSidebar.innerHTML = '';
