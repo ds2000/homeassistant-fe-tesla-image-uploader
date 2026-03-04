@@ -45,7 +45,7 @@ jobs:
 
       - name: Fetch models.json from card repo
         run: |
-          curl -sL "https://raw.githubusercontent.com/ds2000/homeassistant-fe-tesla/feature/tefe0001/models.json" \
+          curl -sL "https://raw.githubusercontent.com/ds2000/homeassistant-fe-tesla/main/models.json" \
             -o models.json
           echo "Fetched models.json"
 
@@ -107,7 +107,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add processed/
+          git add processed/offcharge/overlays/ processed/oncharge/overlays/
+          git add processed/offcharge/controls-bg.png processed/offcharge/climate-bg.png
+          git add processed/oncharge/controls-bg-charging.png processed/oncharge/climate-bg-charging.png
           git diff --cached --quiet && echo "No processed files to commit" && exit 0
           git commit -m "processed: generate overlays (offcharge + oncharge)"
           git push

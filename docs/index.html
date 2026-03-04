@@ -132,7 +132,12 @@
 
             <div id="upload-error" class="error-text" hidden></div>
 
-            <button id="btn-submit-upload" class="btn btn-primary" disabled>Submit images</button>
+            <div id="verify-results" class="verify-results" hidden></div>
+
+            <div class="upload-actions">
+                <button id="btn-verify-upload" class="btn btn-secondary" disabled>Verify images</button>
+                <button id="btn-submit-upload" class="btn btn-primary" disabled>Submit images</button>
+            </div>
 
             <div id="upload-progress" class="upload-progress" hidden>
                 <div class="upload-progress-text" id="upload-progress-text">Preparing...</div>
@@ -153,6 +158,38 @@
         <footer class="footer">
             <p>Open source &middot; <a href="https://github.com/ds2000/homeassistant-fe-tesla-image-uploader" target="_blank" rel="noopener">GitHub</a></p>
         </footer>
+    </div>
+
+    <!-- Contributor modal -->
+    <div id="contributor-modal" class="modal-overlay" hidden>
+        <div class="modal-box">
+            <h3 class="modal-title">Almost there!</h3>
+            <p class="modal-desc">Would you like to be credited as a contributor?</p>
+
+            <label class="form-checkbox" id="contributor-opt-in-label">
+                <input type="checkbox" id="contributor-opt-in">
+                <span>Yes, add me to the contributors section</span>
+            </label>
+
+            <div id="contributor-fields" class="contributor-fields" hidden>
+                <div class="form-group">
+                    <label class="form-label">Credit me as</label>
+                    <div class="contributor-type-row">
+                        <label class="radio-pill"><input type="radio" name="contributor-type" value="name" checked><span>Name</span></label>
+                        <label class="radio-pill"><input type="radio" name="contributor-type" value="github"><span>GitHub</span></label>
+                        <label class="radio-pill"><input type="radio" name="contributor-type" value="email"><span>Email</span></label>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <input id="contributor-value" type="text" class="form-input" placeholder="Your name">
+                </div>
+            </div>
+
+            <div class="modal-actions">
+                <button id="btn-contributor-submit" class="btn btn-primary">Submit images</button>
+                <button id="btn-contributor-skip" class="btn btn-secondary">Skip &amp; submit</button>
+            </div>
+        </div>
     </div>
 
     <script src="submit.js"></script>

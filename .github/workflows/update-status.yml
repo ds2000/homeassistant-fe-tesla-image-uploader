@@ -19,7 +19,7 @@ jobs:
 
       - name: Fetch models.json from card repo
         run: |
-          curl -sL "https://raw.githubusercontent.com/ds2000/homeassistant-fe-tesla/feature/tefe0001/models.json" \
+          curl -sL "https://raw.githubusercontent.com/ds2000/homeassistant-fe-tesla/main/models.json" \
             -o models.json
           echo "Fetched models.json"
 
@@ -89,6 +89,54 @@ jobs:
 
           mv status_updated.json status.json
 
+      - name: Update README contributors
+        if: github.event.pull_request.merged == true
+        env:
+          MODEL: ${{ steps.parse.outputs.model }}
+          VARIANT: ${{ steps.parse.outputs.variant }}
+          COLOUR: ${{ steps.parse.outputs.colour }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          # Fetch contributor.json from the merged commit via API
+          CONTRIBUTOR_JSON=$(gh api \
+            "/repos/${GITHUB_REPOSITORY}/contents/submissions/${MODEL}/${VARIANT}/${COLOUR}/contributor.json?ref=${MERGE_SHA}" \
+            --jq '.content' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+
+          if [ -z "$CONTRIBUTOR_JSON" ]; then
+            echo "No contributor.json found — skipping README update"
+            exit 0
+          fi
+
+          CREDIT=$(echo "$CONTRIBUTOR_JSON" | jq -r '.credit // empty')
+          CREDIT_TYPE=$(echo "$CONTRIBUTOR_JSON" | jq -r '.type // "name"')
+
+          if [ -z "$CREDIT" ]; then
+            echo "No credit info — skipping"
+            exit 0
+          fi
+
+          # Format display name
+          case "$CREDIT_TYPE" in
+            github) DISPLAY="[@${CREDIT}](https://github.com/${CREDIT})" ;;
+            *) DISPLAY="$CREDIT" ;;
+          esac
+
+          # Build submission label from models.json
+          MODEL_LABEL=$(jq -r --arg m "$MODEL" '.models[] | select(.id == $m) | .name' models.json)
+          VARIANT_LABEL=$(jq -r --arg m "$MODEL" --arg v "$VARIANT" \
+            '.models[] | select(.id == $m) | .variants[] | select(.id == $v) | .label' models.json)
+          COLOUR_LABEL=$(jq -r --arg m "$MODEL" --arg v "$VARIANT" --arg c "$COLOUR" \
+            '.models[] | select(.id == $m) | .variants[] | select(.id == $v) | .colours[] | select(.id == $c) | .name' models.json)
+          SUBMISSION="${MODEL_LABEL} ${VARIANT_LABEL} — ${COLOUR_LABEL}"
+
+          # Insert into README contributors table (before the end marker)
+          if grep -q "<!-- END_CONTRIBUTORS -->" README.md; then
+            sed -i "/<!-- END_CONTRIBUTORS -->/i | ${DISPLAY} | ${SUBMISSION} |" README.md
+            echo "Added contributor: ${DISPLAY} — ${SUBMISSION}"
+          else
+            echo "::warning::END_CONTRIBUTORS marker not found in README.md"
+          fi
+
       - name: Commit and push
         env:
           MODEL: ${{ steps.parse.outputs.model }}
@@ -99,8 +147,8 @@ jobs:
         run: |
           STATUS_KEY="${MODEL}/${VARIANT}/${COLOUR}"
 
-          git add status.json
-          git diff --cached --quiet && echo "No changes to status.json — skipping commit" && exit 0
+          git add status.json README.md
+          git diff --cached --quiet && echo "No changes — skipping commit" && exit 0
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"

@@ -12,7 +12,7 @@ var CARD_REPO = 'ds2000/homeassistant-fe-tesla';
 var MODELS_URL =
     'https://raw.githubusercontent.com/' +
     CARD_REPO +
-    '/feature/tefe0001/models.json';
+    '/main/models.json';
 
 var WORKFLOW_FILE = 'send-verification.yml';
 
@@ -196,7 +196,17 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
     var $uploadSuccess = document.getElementById('upload-success');
     var $uploadSuccessLink = document.getElementById('upload-success-link');
     var $uploadError = document.getElementById('upload-error');
+    var $btnVerify = document.getElementById('btn-verify-upload');
+    var $verifyResults = document.getElementById('verify-results');
     var $btnBack1From3 = document.getElementById('btn-back-to-step1-from3');
+
+    // Contributor modal
+    var $contributorModal = document.getElementById('contributor-modal');
+    var $contributorOptIn = document.getElementById('contributor-opt-in');
+    var $contributorFields = document.getElementById('contributor-fields');
+    var $contributorValue = document.getElementById('contributor-value');
+    var $btnContributorSubmit = document.getElementById('btn-contributor-submit');
+    var $btnContributorSkip = document.getElementById('btn-contributor-skip');
 
     var stepperSteps = document.querySelectorAll('.stepper-step');
 
@@ -209,6 +219,7 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
     var verificationToken = '';
     var uploadedFiles = {};
     var uploadCableFlags = {}; // layerKey → true/false (detected from ORIGINAL screenshot before crop)
+    var contributorInfo = null;   // {credit, type} or null
     var currentLayerIndex = 0;
     var layerDOMCache = {};
     var lastContinueClick = 0;
@@ -1035,6 +1046,7 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
         var count = Object.keys(uploadedFiles).length;
         $uploadCounter.textContent = count + ' of ' + LAYERS.length + ' screenshots uploaded';
         $btnSubmit.disabled = count < LAYERS.length;
+        $btnVerify.disabled = count === 0;
     }
 
     // ── Upload: progress & state helpers ─────────────────────────────────
@@ -1145,8 +1157,34 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
 
     function showUploadSuccess(branchName) {
         $uploadSuccess.hidden = false;
-        $uploadSuccessLink.href = 'https://github.com/' + REPO + '/tree/' + encodeURIComponent(branchName);
+        $uploadSuccess.innerHTML = '';
+
+        var thankP = document.createElement('p');
+        thankP.innerHTML = '<strong>Thank you for your contribution!</strong>';
+        $uploadSuccess.appendChild(thankP);
+
+        var descP = document.createElement('p');
+        descP.textContent = 'Your images have been submitted and will be processed automatically. A pull request will be created shortly.';
+        $uploadSuccess.appendChild(descP);
+
+        var linkP = document.createElement('p');
+        var link = document.createElement('a');
+        link.href = 'https://github.com/' + REPO + '/tree/' + encodeURIComponent(branchName);
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.textContent = 'View submission branch on GitHub';
+        linkP.appendChild(link);
+        $uploadSuccess.appendChild(linkP);
+
+        if (contributorInfo) {
+            var creditP = document.createElement('p');
+            creditP.className = 'notice-small';
+            creditP.textContent = 'You\u2019ll be added to the contributors list when your submission is merged.';
+            $uploadSuccess.appendChild(creditP);
+        }
+
         $btnSubmit.hidden = true;
+        $btnVerify.hidden = true;
         $uploadWizard.style.opacity = '0.5';
         $uploadWizard.style.pointerEvents = 'none';
         $btnBack1From3.disabled = false;
@@ -1155,6 +1193,7 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
     function resetUploadState() {
         uploadedFiles = {};
         uploadCableFlags = {};
+        contributorInfo = null;
         layerDOMCache = {};
         currentLayerIndex = 0;
         $uploadSidebar.innerHTML = '';
@@ -1164,11 +1203,142 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
         $uploadSuccess.hidden = true;
         $uploadProgress.hidden = true;
         $uploadError.hidden = true;
+        $verifyResults.hidden = true;
+        $btnVerify.disabled = true;
         $btnSubmit.hidden = false;
         $btnSubmit.disabled = true;
+        $btnVerify.hidden = false;
+        $btnVerify.disabled = true;
         $uploadWizard.style.opacity = '';
         $uploadWizard.style.pointerEvents = '';
     }
+
+    // ── Verify button ────────────────────────────────────────────────────
+
+    function runVerification() {
+        $verifyResults.hidden = false;
+        $verifyResults.innerHTML = '';
+        $btnVerify.disabled = true;
+        $btnVerify.textContent = 'Checking\u2026';
+
+        var results = [];
+
+        // Missing images
+        var missing = LAYERS.filter(function (l) { return !uploadedFiles[l.key]; });
+        if (missing.length > 0) {
+            results.push({
+                type: 'warn',
+                text: missing.length + ' screenshot' + (missing.length > 1 ? 's' : '') + ' still needed:',
+                items: missing.map(function (l) {
+                    return l.label + (l.section ? ' (' + l.section + ')' : '');
+                })
+            });
+        }
+
+        // Cable + duplicate checks
+        validateUploads().then(function (issues) {
+            issues.forEach(function (issue) {
+                results.push({ type: 'warn', text: issue.label + ': ' + issue.issue });
+            });
+
+            if (results.length === 0) {
+                results.push({
+                    type: 'pass',
+                    text: 'All ' + LAYERS.length + ' images uploaded and verified'
+                });
+            }
+
+            // Render
+            $verifyResults.innerHTML = '';
+            results.forEach(function (r) {
+                var div = document.createElement('div');
+                div.className = 'verify-item verify-item--' + r.type;
+
+                var icon = r.type === 'pass' ? '\u2713' : '\u26A0';
+                var span = document.createElement('span');
+                span.textContent = icon + ' ' + r.text;
+                div.appendChild(span);
+
+                if (r.items) {
+                    var ul = document.createElement('ul');
+                    ul.className = 'verify-item-list';
+                    r.items.forEach(function (item) {
+                        var li = document.createElement('li');
+                        li.textContent = item;
+                        ul.appendChild(li);
+                    });
+                    div.appendChild(ul);
+                }
+                $verifyResults.appendChild(div);
+            });
+
+            $btnVerify.disabled = false;
+            $btnVerify.textContent = 'Verify images';
+        });
+    }
+
+    // ── Contributor modal ────────────────────────────────────────────────
+
+    function showContributorModal() {
+        return new Promise(function (resolve) {
+            $contributorModal.hidden = false;
+            $contributorOptIn.checked = false;
+            $contributorFields.hidden = true;
+            $contributorValue.value = '';
+
+            // Reset radio to "name"
+            var radios = document.querySelectorAll('input[name="contributor-type"]');
+            radios.forEach(function (r) { r.checked = r.value === 'name'; });
+            updateContributorPlaceholder();
+
+            function onSubmit() {
+                contributorInfo = null;
+                if ($contributorOptIn.checked && $contributorValue.value.trim()) {
+                    var type = document.querySelector('input[name="contributor-type"]:checked').value;
+                    contributorInfo = { credit: $contributorValue.value.trim(), type: type };
+                }
+                cleanup();
+                resolve();
+            }
+
+            function onSkip() {
+                contributorInfo = null;
+                cleanup();
+                resolve();
+            }
+
+            function cleanup() {
+                $contributorModal.hidden = true;
+                $btnContributorSubmit.removeEventListener('click', onSubmit);
+                $btnContributorSkip.removeEventListener('click', onSkip);
+            }
+
+            $btnContributorSubmit.addEventListener('click', onSubmit);
+            $btnContributorSkip.addEventListener('click', onSkip);
+        });
+    }
+
+    function updateContributorPlaceholder() {
+        var type = document.querySelector('input[name="contributor-type"]:checked');
+        if (!type) return;
+        var map = { name: 'Your name', github: 'GitHub username', email: 'you@example.com' };
+        $contributorValue.placeholder = map[type.value] || 'Your name';
+        $contributorValue.type = type.value === 'email' ? 'email' : 'text';
+    }
+
+    // Contributor modal events (persistent — modal HTML is always in DOM)
+    $contributorOptIn.addEventListener('change', function () {
+        $contributorFields.hidden = !$contributorOptIn.checked;
+        if ($contributorOptIn.checked) $contributorValue.focus();
+    });
+
+    document.querySelectorAll('input[name="contributor-type"]').forEach(function (r) {
+        r.addEventListener('change', function () {
+            updateContributorPlaceholder();
+            $contributorValue.value = '';
+            $contributorValue.focus();
+        });
+    });
 
     // ── Upload: GitHub API helpers ───────────────────────────────────────
 
@@ -1245,6 +1415,23 @@ function ghApi(method, path, body) {
                     mode: '100644',
                     type: 'blob',
                     sha: blob.sha
+                });
+            }
+
+            // 3b. Add contributor.json if opted in
+            if (contributorInfo) {
+                setUploadProgress('Saving contributor info...', 83);
+                var contJson = JSON.stringify(contributorInfo, null, 2);
+                var contBase64 = btoa(unescape(encodeURIComponent(contJson)));
+                var contBlob = await ghApi('POST', '/repos/' + REPO + '/git/blobs', {
+                    content: contBase64,
+                    encoding: 'base64'
+                });
+                treeItems.push({
+                    path: dirPath + 'contributor.json',
+                    mode: '100644',
+                    type: 'blob',
+                    sha: contBlob.sha
                 });
             }
 
@@ -1360,22 +1547,31 @@ function ghApi(method, path, body) {
     }
 
     var validationConfirmed = false;
+
+    function proceedToSubmit() {
+        showContributorModal().then(function () { submitToGitHub(); });
+    }
+
+    $btnVerify.addEventListener('click', function () {
+        runVerification();
+    });
+
     $btnSubmit.addEventListener('click', function () {
         if (validationConfirmed) {
             validationConfirmed = false;
-            submitToGitHub();
+            proceedToSubmit();
             return;
         }
 
         $btnSubmit.disabled = true;
-        $btnSubmit.textContent = 'Checking images...';
+        $btnSubmit.textContent = 'Checking images\u2026';
         hideUploadError();
 
         validateUploads().then(function (issues) {
             if (issues.length === 0) {
                 $btnSubmit.disabled = false;
                 $btnSubmit.textContent = 'Submit images';
-                submitToGitHub();
+                proceedToSubmit();
                 return;
             }
 

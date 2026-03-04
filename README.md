@@ -21,3 +21,14 @@ Contributors submit car images via a GitHub Pages web app. Submissions are autom
 
 - **Submit images:** https://ds2000.github.io/homeassistant-fe-tesla-image-uploader
 - **Tesla card:** https://github.com/ds2000/homeassistant-fe-tesla
+
+## Contributors
+
+Thanks to everyone who has submitted images for the card!
+
+<!-- Contributors are added here when submission PRs are merged. -->
+<!-- Format: | [@username](https://github.com/username) | Model 3 2017-2023 Red Multi-Coat | -->
+
+| Contributor | Submission |
+|-------------|------------|
+<!-- END_CONTRIBUTORS -->

@@ -1,0 +1,248 @@
+# Promote processed images to the card repo when a submission PR is merged
+name: Promote to Card
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  promote:
+    if: github.event.pull_request.merged == true && startsWith(github.head_ref, 'submissions/')
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GH_BOT_TOKEN }}
+    steps:
+      - name: Checkout uploader repo at merge commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          token: ${{ secrets.GH_BOT_TOKEN }}
+
+      - name: Fetch models.json from card repo
+        run: |
+          curl -sL "https://raw.githubusercontent.com/ds2000/homeassistant-fe-tesla/main/models.json" \
+            -o models.json
+          echo "Fetched models.json"
+
+      - name: Parse branch name
+        id: parse
+        env:
+          BRANCH: ${{ github.head_ref }}
+        run: |
+          # Strip submissions/ prefix
+          DIR_NAME="${BRANCH#submissions/}"
+          echo "Parsing branch: $BRANCH (dir_name: $DIR_NAME)"
+
+          # Parse using models.json: try each model ID as prefix, then each variant ID
+          FOUND=false
+
+          for MODEL in $(jq -r '.models[].id' models.json); do
+            if [[ "$DIR_NAME" == "${MODEL}-"* ]]; then
+              REMAINDER="${DIR_NAME#${MODEL}-}"
+
+              for VARIANT in $(jq -r --arg m "$MODEL" '.models[] | select(.id == $m) | .variants[].id' models.json); do
+                if [[ "$REMAINDER" == "${VARIANT}-"* ]]; then
+                  COLOUR_AND_TOKEN="${REMAINDER#${VARIANT}-}"
+                  # Colour is everything except the last -XXXX (4-char hex token)
+                  COLOUR=$(echo "$COLOUR_AND_TOKEN" | sed 's/-[0-9a-f]\{4\}$//')
+
+                  # Verify this colour exists in models.json
+                  if jq -e --arg m "$MODEL" --arg v "$VARIANT" --arg c "$COLOUR" \
+                    '.models[] | select(.id == $m) | .variants[] | select(.id == $v) | .colours[] | select(.id == $c)' \
+                    models.json > /dev/null 2>&1; then
+                    echo "model=$MODEL" >> "$GITHUB_OUTPUT"
+                    echo "variant=$VARIANT" >> "$GITHUB_OUTPUT"
+                    echo "colour=$COLOUR" >> "$GITHUB_OUTPUT"
+                    echo "Parsed: model=$MODEL variant=$VARIANT colour=$COLOUR"
+                    FOUND=true
+                    break 2
+                  fi
+                fi
+              done
+            fi
+          done
+
+          if [ "$FOUND" != "true" ]; then
+            echo "::error::Could not parse model/variant/colour from branch: $BRANCH"
+            exit 1
+          fi
+
+      - name: Read display labels from models.json
+        id: labels
+        env:
+          MODEL: ${{ steps.parse.outputs.model }}
+          VARIANT: ${{ steps.parse.outputs.variant }}
+          COLOUR: ${{ steps.parse.outputs.colour }}
+        run: |
+          MODEL_LABEL=$(jq -r --arg m "$MODEL" \
+            '.models[] | select(.id == $m) | .name' models.json)
+          VARIANT_LABEL=$(jq -r --arg m "$MODEL" --arg v "$VARIANT" \
+            '.models[] | select(.id == $m) | .variants[] | select(.id == $v) | .label' models.json)
+          COLOUR_LABEL=$(jq -r --arg m "$MODEL" --arg v "$VARIANT" --arg c "$COLOUR" \
+            '.models[] | select(.id == $m) | .variants[] | select(.id == $v) | .colours[] | select(.id == $c) | .name' models.json)
+
+          echo "model_label=$MODEL_LABEL" >> "$GITHUB_OUTPUT"
+          echo "variant_label=$VARIANT_LABEL" >> "$GITHUB_OUTPUT"
+          echo "colour_label=$COLOUR_LABEL" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout card repo
+        uses: actions/checkout@v4
+        with:
+          repository: ds2000/homeassistant-fe-tesla
+          ref: main
+          token: ${{ secrets.GH_BOT_TOKEN }}
+          path: card-repo
+
+      - name: Copy processed files to card repo
+        env:
+          MODEL: ${{ steps.parse.outputs.model }}
+          VARIANT: ${{ steps.parse.outputs.variant }}
+          COLOUR: ${{ steps.parse.outputs.colour }}
+        run: |
+          DEST="card-repo/images/models/${MODEL}/${VARIANT}/${COLOUR}"
+          mkdir -p "${DEST}/overlays"
+
+          # Copy offcharge overlays
+          cp processed/offcharge/overlays/* "${DEST}/overlays/"
+
+          # Copy oncharge overlays
+          cp processed/oncharge/overlays/* "${DEST}/overlays/"
+
+          # Copy offcharge panel backgrounds
+          cp processed/offcharge/controls-bg.png "${DEST}/controls-bg.png"
+          cp processed/offcharge/climate-bg.png "${DEST}/climate-bg.png"
+
+          # Copy oncharge panel backgrounds
+          cp processed/oncharge/controls-bg-charging.png "${DEST}/controls-bg-charging.png"
+          cp processed/oncharge/climate-bg-charging.png "${DEST}/climate-bg-charging.png"
+
+          echo "Copied files to ${DEST}/"
+          ls -la "${DEST}/"
+          ls -la "${DEST}/overlays/"
+
+      - name: Update models.json hasImages
+        env:
+          MODEL: ${{ steps.parse.outputs.model }}
+          VARIANT: ${{ steps.parse.outputs.variant }}
+          COLOUR: ${{ steps.parse.outputs.colour }}
+        run: |
+          jq --arg m "$MODEL" --arg v "$VARIANT" --arg c "$COLOUR" \
+            '(.models[] | select(.id == $m) | .variants[] | select(.id == $v) | .colours[] | select(.id == $c)).hasImages = true' \
+            card-repo/models.json > tmp.json && mv tmp.json card-repo/models.json
+
+      - name: Read contributor info
+        id: contributor
+        env:
+          MODEL: ${{ steps.parse.outputs.model }}
+          VARIANT: ${{ steps.parse.outputs.variant }}
+          COLOUR: ${{ steps.parse.outputs.colour }}
+        run: |
+          CONTRIB_FILE="submissions/${MODEL}/${VARIANT}/${COLOUR}/contributor.json"
+          if [ -f "$CONTRIB_FILE" ]; then
+            CREDIT=$(jq -r '.credit // empty' "$CONTRIB_FILE")
+            CREDIT_TYPE=$(jq -r '.type // "name"' "$CONTRIB_FILE")
+            if [ -n "$CREDIT" ]; then
+              echo "credit=$CREDIT" >> "$GITHUB_OUTPUT"
+              echo "type=$CREDIT_TYPE" >> "$GITHUB_OUTPUT"
+              echo "found=true" >> "$GITHUB_OUTPUT"
+              echo "Contributor: $CREDIT ($CREDIT_TYPE)"
+            else
+              echo "found=false" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "No contributor.json found"
+          fi
+
+      - name: Update card README and CHANGELOG
+        env:
+          MODEL_LABEL: ${{ steps.labels.outputs.model_label }}
+          VARIANT_LABEL: ${{ steps.labels.outputs.variant_label }}
+          COLOUR_LABEL: ${{ steps.labels.outputs.colour_label }}
+          HAS_CONTRIBUTOR: ${{ steps.contributor.outputs.found }}
+          CREDIT: ${{ steps.contributor.outputs.credit }}
+          CREDIT_TYPE: ${{ steps.contributor.outputs.type }}
+        run: |
+          cd card-repo
+          SUBMISSION="${MODEL_LABEL} ${VARIANT_LABEL} — ${COLOUR_LABEL}"
+
+          # Format contributor display
+          DISPLAY=""
+          if [ "$HAS_CONTRIBUTOR" = "true" ]; then
+            case "$CREDIT_TYPE" in
+              github) DISPLAY="[@${CREDIT}](https://github.com/${CREDIT})" ;;
+              *) DISPLAY="$CREDIT" ;;
+            esac
+          fi
+
+          # Update README contributors table
+          if grep -q "<!-- END_CONTRIBUTORS -->" README.md; then
+            if [ -n "$DISPLAY" ]; then
+              sed -i "/<!-- END_CONTRIBUTORS -->/i | ${DISPLAY} | ${SUBMISSION} |" README.md
+            else
+              sed -i "/<!-- END_CONTRIBUTORS -->/i | _(anonymous)_ | ${SUBMISSION} |" README.md
+            fi
+            echo "Updated README contributors"
+          fi
+
+          # Update CHANGELOG — add entry under latest "### Added" section
+          if [ -n "$DISPLAY" ]; then
+            ENTRY="- **${SUBMISSION}** images (contributed by ${DISPLAY})"
+          else
+            ENTRY="- **${SUBMISSION}** images"
+          fi
+
+          if grep -q "^### Added" CHANGELOG.md; then
+            sed -i "0,/^### Added$/s/^### Added$/### Added\n${ENTRY}/" CHANGELOG.md
+            echo "Updated CHANGELOG"
+          fi
+
+      - name: Create branch, commit and push
+        env:
+          MODEL: ${{ steps.parse.outputs.model }}
+          VARIANT: ${{ steps.parse.outputs.variant }}
+          COLOUR: ${{ steps.parse.outputs.colour }}
+          MODEL_LABEL: ${{ steps.labels.outputs.model_label }}
+          VARIANT_LABEL: ${{ steps.labels.outputs.variant_label }}
+          COLOUR_LABEL: ${{ steps.labels.outputs.colour_label }}
+        run: |
+          cd card-repo
+          BRANCH_NAME="images/${MODEL}-${VARIANT}-${COLOUR}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH_NAME"
+          git add images/ models.json README.md CHANGELOG.md
+          git commit -m "images: add ${MODEL_LABEL} ${VARIANT_LABEL} — ${COLOUR_LABEL}"
+          git push origin "$BRANCH_NAME"
+
+      - name: Open PR in card repo
+        env:
+          MODEL_LABEL: ${{ steps.labels.outputs.model_label }}
+          VARIANT_LABEL: ${{ steps.labels.outputs.variant_label }}
+          COLOUR_LABEL: ${{ steps.labels.outputs.colour_label }}
+          MODEL: ${{ steps.parse.outputs.model }}
+          VARIANT: ${{ steps.parse.outputs.variant }}
+          COLOUR: ${{ steps.parse.outputs.colour }}
+          UPLOADER_PR: ${{ github.event.pull_request.number }}
+        run: |
+          BRANCH_NAME="images/${MODEL}-${VARIANT}-${COLOUR}"
+          TITLE="images: ${MODEL_LABEL} ${VARIANT_LABEL} — ${COLOUR_LABEL}"
+
+          cat > /tmp/pr_body.md <<PREOF
+          Promoted from uploader repo submission PR #${UPLOADER_PR}.
+
+          Adds processed overlays and panel backgrounds for **${MODEL_LABEL} ${VARIANT_LABEL} — ${COLOUR_LABEL}**.
+
+          Sets \`hasImages: true\` in models.json for \`${MODEL}/${VARIANT}/${COLOUR}\`.
+          PREOF
+          sed -i 's/^          //' /tmp/pr_body.md
+
+          PR_URL=$(gh pr create \
+            --repo ds2000/homeassistant-fe-tesla \
+            --title "$TITLE" \
+            --base main \
+            --head "$BRANCH_NAME" \
+            --body-file /tmp/pr_body.md)
+
+          echo "Created card repo PR: $PR_URL"

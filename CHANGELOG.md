@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0] - 2026-03-04
+
+### Added
+- **Verify button** on the upload page -- runs image checks (missing screenshots, cable detection, duplicate detection) at any time before submitting
+- **Contributor prompt** -- on submit, users can opt in to be credited in the project's contributors section (name, GitHub username, or email); saved as `contributor.json` alongside the submission
+- **Thank-you message** -- success screen thanks the contributor and confirms they'll be listed when merged
+- **Card button test** (`tests/test_card_buttons.py`) -- static analysis verifying every `_svc()` call in the tesla-card source uses the correct HA domain, service, and entity
+- **E2E submission test** (`tests/test_e2e_submission.py`) -- uploads test images via the GitHub API, creates a submission branch, waits for the workflow, and verifies the PR
+
+### Changed
+- Submit and Verify buttons now sit side-by-side in the upload step
+- Upload success message rewritten with a personalised thank-you
+
 ## [0.2.0] - 2026-03-03
 
 ### Added

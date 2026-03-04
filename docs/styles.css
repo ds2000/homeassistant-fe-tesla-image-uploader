@@ -1187,6 +1187,183 @@ a:hover {
     cursor: not-allowed;
 }
 
+/* ── Upload actions row ─────────────────────────────────────── */
+
+.upload-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 18px;
+}
+
+.upload-actions .btn {
+    flex: 1;
+}
+
+/* ── Verify results ────────────────────────────────────────── */
+
+.verify-results {
+    margin-top: 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    background: var(--bg-input);
+}
+
+.verify-item {
+    font-size: .875rem;
+    padding: 6px 0;
+}
+
+.verify-item + .verify-item {
+    border-top: 1px solid var(--border);
+}
+
+.verify-item--pass {
+    color: #4caf50;
+}
+
+.verify-item--warn {
+    color: #ffa726;
+}
+
+.verify-item-list {
+    margin: 6px 0 0 20px;
+    font-size: .8rem;
+    color: var(--text-muted);
+    list-style: disc;
+}
+
+.verify-item-list li {
+    padding: 1px 0;
+}
+
+/* ── Contributor modal ─────────────────────────────────────── */
+
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, .7);
+    backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    animation: modalFadeIn .2s ease;
+}
+
+.modal-overlay[hidden] {
+    display: none;
+}
+
+@keyframes modalFadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+.modal-box {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 28px 24px;
+    max-width: 420px;
+    width: 100%;
+    animation: modalSlideIn .25s ease;
+}
+
+@keyframes modalSlideIn {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.modal-title {
+    font-size: 1.1rem;
+    font-weight: 700;
+    margin-bottom: 6px;
+}
+
+.modal-desc {
+    font-size: .875rem;
+    color: var(--text-muted);
+    margin-bottom: 20px;
+}
+
+.modal-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+}
+
+.modal-actions .btn {
+    flex: 1;
+}
+
+/* Checkbox */
+
+.form-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: .9rem;
+    cursor: pointer;
+    padding: 10px 0;
+    user-select: none;
+}
+
+.form-checkbox input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--red);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+/* Contributor fields */
+
+.contributor-fields {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+}
+
+.contributor-type-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.radio-pill {
+    display: flex;
+    cursor: pointer;
+    user-select: none;
+}
+
+.radio-pill input {
+    display: none;
+}
+
+.radio-pill span {
+    padding: 6px 14px;
+    font-size: .8rem;
+    font-weight: 600;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    color: var(--text-muted);
+    background: var(--bg-input);
+    transition: all .15s;
+}
+
+.radio-pill input:checked + span {
+    background: var(--red-dim);
+    border-color: var(--red);
+    color: var(--red);
+}
+
+.radio-pill:hover span {
+    background: var(--bg-hover);
+    color: var(--text);
+}
+
 @media (prefers-reduced-motion: reduce) {
     .stagger-in,
     .stagger-out,
@@ -1194,7 +1371,9 @@ a:hover {
     .step.stagger-children > *,
     .upload-main.stagger-content > *,
     .preview-modal,
-    .preview-modal-content {
+    .preview-modal-content,
+    .modal-overlay,
+    .modal-box {
         animation: none !important;
     }
 }

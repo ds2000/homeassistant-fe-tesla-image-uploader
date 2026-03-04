@@ -8,6 +8,12 @@ __pycache__/
 
 # Raw screenshots (large, not for repo)
 screenshots/
+reference/
+submissions/
+
+# Node
+node_modules/
+package-lock.json
 
 # OS files
 .DS_Store
