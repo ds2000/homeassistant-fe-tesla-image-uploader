@@ -109,7 +109,7 @@
   }
 
   function rawUrl(path) {
-    return 'https://raw.githubusercontent.com/' + REPO + '/' + encodeURIComponent(branch) + '/' + path;
+    return 'https://raw.githubusercontent.com/' + REPO + '/' + branch + '/' + path;
   }
 
   var MODES = {
@@ -258,12 +258,27 @@
     var preview = document.getElementById('preview');
     preview.innerHTML = '';
 
+    var zIdx = 1;
+
+    // Base layer (z-index 0)
     var baseFile = active.trunk ? m.prefix + 'trunk-open.png' : m.prefix + 'base.png';
     var baseImg = document.createElement('img');
     baseImg.src = rawUrl(m.dir + '/' + baseFile);
     baseImg.alt = baseFile;
+    baseImg.style.zIndex = 0;
     preview.appendChild(baseImg);
 
+    // Trunk-open as overlay layer when trunk is active (above base, below everything else)
+    if (active.trunk) {
+      var trunkImg = document.createElement('img');
+      trunkImg.src = rawUrl(m.dir + '/' + m.prefix + 'trunk-open.png');
+      trunkImg.alt = 'trunk-open';
+      trunkImg.className = 'overlay-img';
+      trunkImg.style.zIndex = zIdx++;
+      preview.appendChild(trunkImg);
+    }
+
+    // Build overlay list from z-order
     var overlayFiles = [];
     var nfNrKey = m.prefix + 'nf-nr-combined-overlay.png';
     var ffFrKey = m.prefix + 'ff-fr-combined-overlay.png';
@@ -290,19 +305,23 @@
       overlayFiles.push(m.prefix + name + '-overlay.png');
     });
 
+    // Stack overlays with incrementing z-index (doors always above trunk/frunk)
     overlayFiles.forEach(function (f) {
       var img = document.createElement('img');
       img.src = rawUrl(m.dir + '/' + f);
       img.alt = f;
       img.className = 'overlay-img';
+      img.style.zIndex = zIdx++;
       preview.appendChild(img);
     });
 
+    // Cable overlay on top of everything
     if (chargingActive && chargingMode && fileStatus['oncharge-cable-overlay.png'] && fileStatus['oncharge-cable-overlay.png'].ok) {
       var cableImg = document.createElement('img');
       cableImg.src = rawUrl(MODES.oncharge.dir + '/oncharge-cable-overlay.png');
       cableImg.alt = 'cable';
       cableImg.className = 'overlay-img charging-glow';
+      cableImg.style.zIndex = zIdx++;
       preview.appendChild(cableImg);
     }
 
