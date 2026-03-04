@@ -167,11 +167,17 @@ jobs:
           EMAILEOF
           )
 
-          # Replace placeholders in HTML
-          HTML_BODY="${HTML_BODY//__MODEL_LABEL__/$MODEL_LABEL}"
-          HTML_BODY="${HTML_BODY//__VARIANT_LABEL__/$VARIANT_LABEL}"
-          HTML_BODY="${HTML_BODY//__COLOUR_LABEL__/$COLOUR_LABEL}"
-          HTML_BODY="${HTML_BODY//__VERIFY_URL__/$VERIFY_URL}"
+          # Replace placeholders in HTML (python avoids & interpretation issues in bash/sed/awk)
+          export MODEL_LABEL VARIANT_LABEL COLOUR_LABEL VERIFY_URL
+          HTML_BODY=$(python3 -c "
+import sys, os
+html = sys.stdin.read()
+html = html.replace('__MODEL_LABEL__', os.environ['MODEL_LABEL'])
+html = html.replace('__VARIANT_LABEL__', os.environ['VARIANT_LABEL'])
+html = html.replace('__COLOUR_LABEL__', os.environ['COLOUR_LABEL'])
+html = html.replace('__VERIFY_URL__', os.environ['VERIFY_URL'])
+print(html, end='')
+          " <<< "$HTML_BODY")
 
           # Send via Resend API
           RESPONSE=$(curl -s -w "\n%{http_code}" -X POST https://api.resend.com/emails \
