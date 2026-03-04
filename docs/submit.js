@@ -1440,17 +1440,15 @@ function ghApi(method, path, body) {
     // Check for verification callback first (before data loads)
     var hasCallback = checkVerificationCallback();
 
-    // Determine base URL for status.json — works on GitHub Pages and local dev
+    // Determine base URL for status.json
+    // Production uses the Worker /status endpoint (bypasses raw.githubusercontent CDN caching)
+    // Local dev uses a local file
     statusUrl = (function () {
         var host = window.location.hostname;
         if (host === 'localhost' || host === '127.0.0.1') {
             return 'status.json';
         }
-        var base = window.location.origin + window.location.pathname;
-        if (base.indexOf('/docs/') !== -1) {
-            return base.replace(/\/docs\/.*$/, '/status.json');
-        }
-        return 'https://raw.githubusercontent.com/' + REPO + '/TESUPL0001/status.json';
+        return WORKER_API + '/status';
     })();
 
     // Fetch models.json (from card repo) and status.json in parallel
