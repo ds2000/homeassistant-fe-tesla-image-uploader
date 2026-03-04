@@ -171,7 +171,7 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
     var $btnBack1 = document.getElementById('btn-back-to-step1');
     var $btnDevSkip = document.getElementById('btn-dev-skip');
     var isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-    if (!isLocal) $btnDevSkip.hidden = true;
+    if (!isLocal) $btnDevSkip.parentNode.removeChild($btnDevSkip);
 
     var $uploadCombo = document.getElementById('upload-combo-label');
     var $uploadWizard = document.getElementById('upload-wizard');
@@ -1147,14 +1147,16 @@ function ghApi(method, path, body) {
         setStep(1);
     });
 
-    $btnDevSkip.addEventListener('click', function () {
-        sessionStorage.setItem('verified', 'true');
-        sessionStorage.setItem('verified_model', selection.model);
-        sessionStorage.setItem('verified_variant', selection.variant);
-        sessionStorage.setItem('verified_colour', selection.colour);
-        $uploadCombo.textContent = comboLabel();
-        setStep(3);
-    });
+    if ($btnDevSkip) {
+        $btnDevSkip.addEventListener('click', function () {
+            sessionStorage.setItem('verified', 'true');
+            sessionStorage.setItem('verified_model', selection.model);
+            sessionStorage.setItem('verified_variant', selection.variant);
+            sessionStorage.setItem('verified_colour', selection.colour);
+            $uploadCombo.textContent = comboLabel();
+            setStep(3);
+        });
+    }
 
     $btnSubmit.addEventListener('click', submitToGitHub);
 
