@@ -12,7 +12,7 @@ var CARD_REPO = 'ds2000/homeassistant-fe-tesla';
 var MODELS_URL =
     'https://raw.githubusercontent.com/' +
     CARD_REPO +
-    '/main/models.json';
+    '/feature/tefe0001/models.json';
 
 var WORKFLOW_FILE = 'send-verification.yml';
 
@@ -1212,7 +1212,7 @@ function ghApi(method, path, body) {
         if (base.indexOf('/docs/') !== -1) {
             return base.replace(/\/docs\/.*$/, '/status.json');
         }
-        return 'https://raw.githubusercontent.com/' + REPO + '/main/status.json';
+        return 'https://raw.githubusercontent.com/' + REPO + '/TESUPL0001/status.json';
     })();
 
     // Fetch models.json (from card repo) and status.json in parallel

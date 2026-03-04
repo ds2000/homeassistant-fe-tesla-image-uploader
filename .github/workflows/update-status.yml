@@ -19,7 +19,7 @@ jobs:
 
       - name: Fetch models.json from card repo
         run: |
-          curl -sL "https://raw.githubusercontent.com/ds2000/homeassistant-fe-tesla/main/models.json" \
+          curl -sL "https://raw.githubusercontent.com/ds2000/homeassistant-fe-tesla/feature/tefe0001/models.json" \
             -o models.json
           echo "Fetched models.json"
 
