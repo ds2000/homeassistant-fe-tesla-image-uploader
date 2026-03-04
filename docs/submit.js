@@ -212,7 +212,11 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
 
     function getStatus(modelId, variantId, colourId) {
         var key = modelId + '/' + variantId + '/' + colourId;
-        return statusData[key] || { status: 'available' };
+        if (statusData[key]) return statusData[key];
+        // Check models.json hasImages flag — if true, card already has images
+        var c = findColour(modelId, variantId, colourId);
+        if (c && c.hasImages) return { status: 'complete' };
+        return { status: 'available' };
     }
 
     function findModel(id) {
