@@ -169,9 +169,15 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
     var $verifySentEmail = document.getElementById('verify-sent-email');
     var $btnResend = document.getElementById('btn-resend');
     var $btnBack1 = document.getElementById('btn-back-to-step1');
-    var $btnDevSkip = document.getElementById('btn-dev-skip');
     var isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-    if (!isLocal) $btnDevSkip.parentNode.removeChild($btnDevSkip);
+    var $btnDevSkip = null;
+    if (isLocal) {
+        $btnDevSkip = document.createElement('button');
+        $btnDevSkip.id = 'btn-dev-skip';
+        $btnDevSkip.className = 'btn btn-dev';
+        $btnDevSkip.textContent = 'Skip verification (dev)';
+        $btnBack1.parentNode.appendChild($btnDevSkip);
+    }
 
     var $uploadCombo = document.getElementById('upload-combo-label');
     var $uploadWizard = document.getElementById('upload-wizard');
@@ -204,8 +210,15 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
     var uploadedFiles = {};
     var currentLayerIndex = 0;
     var layerDOMCache = {};
+    var lastContinueClick = 0;
+    var emailCooldownUntil = 0;
+    var emailCooldownTimer = null;
 
     // ── Helpers ─────────────────────────────────────────────────────────
+
+    function cacheBust(url) {
+        return url + (url.indexOf('?') === -1 ? '?' : '&') + '_t=' + Date.now();
+    }
 
     function statusKey() {
         return selection.model + '/' + selection.variant + '/' + selection.colour;
@@ -223,8 +236,8 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
     // Re-fetch models.json + status.json to get latest availability
     function refreshStatus() {
         return Promise.all([
-            fetch(MODELS_URL).then(function (r) { return r.ok ? r.json() : modelsData; }),
-            fetch(statusUrl).then(function (r) { return r.ok ? r.json() : statusData; })
+            fetch(cacheBust(MODELS_URL)).then(function (r) { return r.ok ? r.json() : modelsData; }),
+            fetch(cacheBust(statusUrl)).then(function (r) { return r.ok ? r.json() : statusData; })
         ]).then(function (results) {
             modelsData = results[0];
             statusData = results[1];
@@ -423,9 +436,33 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
         $btnSend.textContent = 'Send verification email';
     }
 
+    function startEmailCooldown() {
+        emailCooldownUntil = Date.now() + 30000;
+        $btnSend.disabled = true;
+        $btnResend.disabled = true;
+        function tick() {
+            var remaining = Math.ceil((emailCooldownUntil - Date.now()) / 1000);
+            if (remaining <= 0) {
+                clearInterval(emailCooldownTimer);
+                emailCooldownTimer = null;
+                $btnSend.textContent = 'Send verification email';
+                $btnSend.disabled = !$inputEmail.validity.valid || !$inputEmail.value.trim();
+                $btnResend.disabled = false;
+                $btnResend.textContent = 'send again';
+                return;
+            }
+            $btnSend.textContent = 'Resend in ' + remaining + 's';
+            $btnResend.textContent = 'resend in ' + remaining + 's';
+        }
+        tick();
+        if (emailCooldownTimer) clearInterval(emailCooldownTimer);
+        emailCooldownTimer = setInterval(tick, 1000);
+    }
+
     function sendVerification() {
         var email = $inputEmail.value.trim();
         if (!email) return;
+        if (Date.now() < emailCooldownUntil) return;
 
         $btnSend.disabled = true;
         $btnSend.innerHTML = '<span class="spinner"></span>Sending...';
@@ -463,6 +500,7 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
                 $verifyForm.hidden = true;
                 $verifySent.hidden = false;
                 $verifySentEmail.textContent = email;
+                startEmailCooldown();
             })
             .catch(function (err) {
                 $btnSend.textContent = 'Send verification email';
@@ -1143,6 +1181,8 @@ function ghApi(method, path, body) {
     $colour.addEventListener('change', onColourChange);
 
     $btnStep2.addEventListener('click', function () {
+        if (Date.now() - lastContinueClick < 2000) return;
+        lastContinueClick = Date.now();
         $btnStep2.disabled = true;
         $btnStep2.textContent = 'Checking availability…';
         refreshStatus().then(function () {
@@ -1177,11 +1217,13 @@ function ghApi(method, path, body) {
     $btnSend.addEventListener('click', sendVerification);
 
     $btnResend.addEventListener('click', function () {
+        if (Date.now() < emailCooldownUntil) return;
         showVerifyForm();
         $inputEmail.focus();
     });
 
     $btnBack1.addEventListener('click', function () {
+        lastContinueClick = 0;
         setStep(1);
     });
 
@@ -1231,6 +1273,7 @@ function ghApi(method, path, body) {
     });
 
     $btnBack1From3.addEventListener('click', function () {
+        lastContinueClick = 0;
         sessionStorage.removeItem('verified');
         sessionStorage.removeItem('verified_model');
         sessionStorage.removeItem('verified_variant');
@@ -1277,9 +1320,23 @@ function ghApi(method, path, body) {
         if (!hasCallback) {
             checkSessionVerification();
         }
+
+        // Reveal app, fade out loading overlay
+        var $overlay = document.getElementById('loading-overlay');
+        document.querySelector('.container').hidden = false;
+        if ($overlay) {
+            $overlay.classList.add('fade-out');
+            setTimeout(function () { $overlay.remove(); }, 400);
+        }
     })
     .catch(function (err) {
-        $model.innerHTML = '<option value="">Failed to load — please refresh</option>';
         console.error('Error loading data:', err);
+        var $overlay = document.getElementById('loading-overlay');
+        if ($overlay) {
+            var $text = $overlay.querySelector('.loading-text');
+            var $spinner = $overlay.querySelector('.loading-spinner');
+            if ($spinner) $spinner.style.display = 'none';
+            if ($text) $text.textContent = 'Failed to load — please refresh the page.';
+        }
     });
 })();

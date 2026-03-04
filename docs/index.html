@@ -8,7 +8,14 @@
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div class="container">
+    <div id="loading-overlay" class="loading-overlay">
+        <div class="loading-content">
+            <div class="loading-spinner"></div>
+            <p class="loading-text">Loading...</p>
+        </div>
+    </div>
+
+    <div class="container" hidden>
         <header class="header">
             <h1 class="header-title">Tesla Card Image Uploader</h1>
             <p class="header-sub">Contribute car images to the <a href="https://github.com/ds2000/homeassistant-fe-tesla" target="_blank" rel="noopener">homeassistant-fe-tesla</a> card</p>
@@ -87,7 +94,6 @@
             </div>
 
             <button id="btn-back-to-step1" class="btn btn-secondary">Back</button>
-            <button id="btn-dev-skip" class="btn btn-dev">Skip verification (dev)</button>
         </section>
 
         <!-- Step 3: Upload images -->

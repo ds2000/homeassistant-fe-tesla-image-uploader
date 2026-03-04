@@ -358,6 +358,44 @@ a:hover {
     color: var(--text-muted);
 }
 
+/* Loading overlay */
+
+.loading-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: var(--bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: opacity .4s ease;
+}
+
+.loading-overlay.fade-out {
+    opacity: 0;
+    pointer-events: none;
+}
+
+.loading-content {
+    text-align: center;
+}
+
+.loading-spinner {
+    width: 36px;
+    height: 36px;
+    border: 3px solid rgba(255, 255, 255, .15);
+    border-top-color: var(--red);
+    border-radius: 50%;
+    animation: spin .7s linear infinite;
+    margin: 0 auto 12px;
+}
+
+.loading-text {
+    color: var(--text-muted);
+    font-family: var(--font);
+    font-size: .9rem;
+}
+
 /* Spinner */
 
 .spinner {
