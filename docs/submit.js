@@ -1310,6 +1310,10 @@ function ghApi(method, path, body) {
 
     $btnBack1.addEventListener('click', function () {
         lastContinueClick = 0;
+        selection.model = '';
+        selection.variant = '';
+        selection.colour = '';
+        refreshStatus().then(function () { populateModels(); });
         setStep(1);
     });
 
@@ -1433,6 +1437,10 @@ function ghApi(method, path, body) {
         sessionStorage.removeItem('verified_variant');
         sessionStorage.removeItem('verified_colour');
         resetUploadState();
+        selection.model = '';
+        selection.variant = '';
+        selection.colour = '';
+        refreshStatus().then(function () { populateModels(); });
         setStep(1);
     });
 
@@ -1459,8 +1467,7 @@ function ghApi(method, path, body) {
             return r.json();
         }),
         fetch(cacheBust(statusUrl)).then(function (r) {
-            if (!r.ok) throw new Error('Failed to load status.json');
-            return r.json();
+            return r.ok ? r.json() : {};
         })
     ])
     .then(function (results) {
