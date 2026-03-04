@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: TESUPL0001
           token: ${{ secrets.GH_BOT_TOKEN }}
 
       - name: Fetch models.json from card repo
@@ -112,4 +112,4 @@ jobs:
           fi
 
           git commit -m "$MSG"
-          git push origin main
+          git push origin TESUPL0001
