@@ -2187,17 +2187,27 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
     if mode == "oncharge":
         base_img = _clean_stray_green(base_img)
 
-    # Copy base images as-is (opaque)
+    # Copy base image as-is (opaque)
     base_out = f"{prefix}base.png"
-    trunk_out = f"{prefix}trunk-open.png"
     base_img.save(str(output_dir / base_out), "PNG")
+    print(f"  Saved {base_out}")
+
+    # Generate trunk overlay — transparent diff of trunk-open vs base.
+    # This allows the card to layer: base → fr-overlay → trunk-overlay,
+    # so the gap between windscreen and trunk arm stays transparent.
+    trunk_out = f"{prefix}trunk-open.png"
+    trunk_overlay_out = f"{prefix}trunk-overlay.png"
     if trunk_path.exists():
-        trunk_img_save = Image.open(str(trunk_path)).convert("RGBA")
+        trunk_img_raw = Image.open(str(trunk_path)).convert("RGBA")
         if mode == "oncharge":
-            trunk_img_save = _clean_stray_green(trunk_img_save)
-        trunk_img_save.save(str(output_dir / trunk_out), "PNG")
-    print(f"  Saved {base_out}" +
-          (f" + {trunk_out}" if trunk_path.exists() else ""))
+            trunk_img_raw = _clean_stray_green(trunk_img_raw)
+        # Keep full trunk-open for backward compat / combo state generation
+        trunk_img_raw.save(str(output_dir / trunk_out), "PNG")
+        # Generate transparent trunk overlay via same diff pipeline as doors
+        trunk_overlay = _compute_overlay(trunk_img_raw, base_img,
+                                         remove_cable=(mode == "oncharge"))
+        trunk_overlay.save(str(output_dir / trunk_overlay_out), "PNG")
+        print(f"  Saved {trunk_out} + {trunk_overlay_out}")
 
     # Extract green charging cable into a dedicated transparent overlay.
     # The card renders this on top of the base and applies CSS glow animation

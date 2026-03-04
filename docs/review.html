@@ -118,6 +118,7 @@
       files: [
         { name: 'base.png', required: true, isOverlay: false },
         { name: 'trunk-open.png', required: true, isOverlay: false },
+        { name: 'trunk-overlay.png', required: true, isOverlay: true },
         { name: 'chargeport-overlay.png', required: true, isOverlay: true },
         { name: 'frunk-overlay.png', required: true, isOverlay: true },
         { name: 'fr-overlay.png', required: true, isOverlay: true },
@@ -145,6 +146,7 @@
       files: [
         { name: 'oncharge-base.png', required: true, isOverlay: false },
         { name: 'oncharge-trunk-open.png', required: true, isOverlay: false },
+        { name: 'oncharge-trunk-overlay.png', required: true, isOverlay: true },
         { name: 'oncharge-frunk-overlay.png', required: true, isOverlay: true },
         { name: 'oncharge-fr-overlay.png', required: true, isOverlay: true },
         { name: 'oncharge-nr-overlay.png', required: true, isOverlay: true },
@@ -159,7 +161,8 @@
         { id: 'nr', label: 'NR' },
         { id: 'fr', label: 'FR' }
       ],
-      zOrder: ['fr', 'frunk', 'nf', 'nr'],
+      belowTrunk: ['fr'],
+      zOrder: ['frunk', 'nf', 'nr'],
       combined: { 'nf+nr': 'oncharge-nf-nr-combined-overlay.png' },
       prefix: 'oncharge-'
     }
@@ -260,15 +263,37 @@
 
     var zIdx = 1;
 
-    // Base layer (z-index 0) — trunk-open swaps the entire base
-    var baseFile = active.trunk ? m.prefix + 'trunk-open.png' : m.prefix + 'base.png';
+    // Base layer (z-index 0) — always base.png
+    var baseFile = m.prefix + 'base.png';
     var baseImg = document.createElement('img');
     baseImg.src = rawUrl(m.dir + '/' + baseFile);
     baseImg.alt = baseFile;
     baseImg.style.zIndex = 0;
     preview.appendChild(baseImg);
 
-    // Build overlay list from z-order
+    // Overlays that render BELOW the trunk lid (oncharge: fr behind trunk)
+    var belowTrunk = m.belowTrunk || [];
+    belowTrunk.forEach(function (name) {
+      if (!active[name]) return;
+      var img = document.createElement('img');
+      img.src = rawUrl(m.dir + '/' + m.prefix + name + '-overlay.png');
+      img.alt = name + '-overlay';
+      img.className = 'overlay-img';
+      img.style.zIndex = zIdx++;
+      preview.appendChild(img);
+    });
+
+    // Trunk overlay (transparent diff, not full base swap)
+    if (active.trunk) {
+      var trunkImg = document.createElement('img');
+      trunkImg.src = rawUrl(m.dir + '/' + m.prefix + 'trunk-overlay.png');
+      trunkImg.alt = 'trunk-overlay';
+      trunkImg.className = 'overlay-img';
+      trunkImg.style.zIndex = zIdx++;
+      preview.appendChild(trunkImg);
+    }
+
+    // Build overlay list from z-order (above trunk)
     var overlayFiles = [];
     var nfNrKey = m.prefix + 'nf-nr-combined-overlay.png';
     var ffFrKey = m.prefix + 'ff-fr-combined-overlay.png';
