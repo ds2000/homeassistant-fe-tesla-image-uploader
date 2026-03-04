@@ -159,7 +159,8 @@
         { id: 'nr', label: 'NR' },
         { id: 'fr', label: 'FR' }
       ],
-      zOrder: ['fr', 'frunk', 'nf', 'nr'],
+      belowTrunk: ['fr'],
+      zOrder: ['frunk', 'nf', 'nr'],
       combined: { 'nf+nr': 'oncharge-nf-nr-combined-overlay.png' },
       prefix: 'oncharge-'
     }
@@ -268,7 +269,19 @@
     baseImg.style.zIndex = 0;
     preview.appendChild(baseImg);
 
-    // Trunk-open as overlay layer when trunk is active (above base, below everything else)
+    // Overlays that render BELOW trunk (oncharge: fr is behind trunk lid)
+    var belowTrunk = m.belowTrunk || [];
+    belowTrunk.forEach(function (name) {
+      if (!active[name]) return;
+      var img = document.createElement('img');
+      img.src = rawUrl(m.dir + '/' + m.prefix + name + '-overlay.png');
+      img.alt = name + '-overlay';
+      img.className = 'overlay-img';
+      img.style.zIndex = zIdx++;
+      preview.appendChild(img);
+    });
+
+    // Trunk-open overlay when trunk is active
     if (active.trunk) {
       var trunkImg = document.createElement('img');
       trunkImg.src = rawUrl(m.dir + '/' + m.prefix + 'trunk-open.png');
@@ -278,7 +291,7 @@
       preview.appendChild(trunkImg);
     }
 
-    // Build overlay list from z-order
+    // Build overlay list from z-order (these render above trunk)
     var overlayFiles = [];
     var nfNrKey = m.prefix + 'nf-nr-combined-overlay.png';
     var ffFrKey = m.prefix + 'ff-fr-combined-overlay.png';
@@ -305,7 +318,7 @@
       overlayFiles.push(m.prefix + name + '-overlay.png');
     });
 
-    // Stack overlays with incrementing z-index (doors always above trunk/frunk)
+    // Stack overlays with incrementing z-index (above trunk)
     overlayFiles.forEach(function (f) {
       var img = document.createElement('img');
       img.src = rawUrl(m.dir + '/' + f);
