@@ -299,8 +299,7 @@
 
     // Z-order constants (DOM order = paint order, later = on top)
     var Z_ORDER_OFFCHARGE = ['chargeport', 'frunk', 'fr', 'ff', 'nr', 'nf'];
-    var BELOW_TRUNK_ONCHARGE = ['fr', 'ff'];
-    var Z_ORDER_ONCHARGE = ['frunk', 'nf', 'nr'];
+    var Z_ORDER_ONCHARGE = ['fr', 'ff', 'frunk', 'nf', 'nr'];
 
     // Toggle definitions per mode
     var TOGGLE_DEFS = {
@@ -1160,23 +1159,12 @@
     function renderPreviewCar() {
         var prefix = previewMode === 'oncharge' ? 'oncharge-' : '';
         var zOrder = previewMode === 'oncharge' ? Z_ORDER_ONCHARGE : Z_ORDER_OFFCHARGE;
-        var belowTrunk = previewMode === 'oncharge' ? BELOW_TRUNK_ONCHARGE : [];
 
-        // Base image (always base.png)
-        var html = '<img src="' + previewImageUrl(prefix + 'base.png') + '" alt="base">';
+        // Base image — trunk-open swaps the entire base
+        var baseFile = previewToggles.trunk ? prefix + 'trunk-open.png' : prefix + 'base.png';
+        var html = '<img src="' + previewImageUrl(baseFile) + '" alt="base">';
 
-        // Overlays that render below the trunk lid (oncharge: fr behind trunk)
-        belowTrunk.forEach(function (key) {
-            if (!previewToggles[key]) return;
-            html += '<img src="' + previewImageUrl(prefix + key + '-overlay.png') + '" alt="' + key + '">';
-        });
-
-        // Trunk-open overlay
-        if (previewToggles.trunk) {
-            html += '<img src="' + previewImageUrl(prefix + 'trunk-open.png') + '" alt="trunk-open">';
-        }
-
-        // Walk z-order and add active overlays (above trunk)
+        // Walk z-order and add active overlays
         zOrder.forEach(function (key) {
             if (!previewToggles[key]) return;
 

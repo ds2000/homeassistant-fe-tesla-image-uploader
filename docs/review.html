@@ -159,8 +159,7 @@
         { id: 'nr', label: 'NR' },
         { id: 'fr', label: 'FR' }
       ],
-      belowTrunk: ['fr'],
-      zOrder: ['frunk', 'nf', 'nr'],
+      zOrder: ['fr', 'frunk', 'nf', 'nr'],
       combined: { 'nf+nr': 'oncharge-nf-nr-combined-overlay.png' },
       prefix: 'oncharge-'
     }
@@ -261,7 +260,7 @@
 
     var zIdx = 1;
 
-    // Base layer (z-index 0)
+    // Base layer (z-index 0) — trunk-open swaps the entire base
     var baseFile = active.trunk ? m.prefix + 'trunk-open.png' : m.prefix + 'base.png';
     var baseImg = document.createElement('img');
     baseImg.src = rawUrl(m.dir + '/' + baseFile);
@@ -269,29 +268,7 @@
     baseImg.style.zIndex = 0;
     preview.appendChild(baseImg);
 
-    // Overlays that render BELOW trunk (oncharge: fr is behind trunk lid)
-    var belowTrunk = m.belowTrunk || [];
-    belowTrunk.forEach(function (name) {
-      if (!active[name]) return;
-      var img = document.createElement('img');
-      img.src = rawUrl(m.dir + '/' + m.prefix + name + '-overlay.png');
-      img.alt = name + '-overlay';
-      img.className = 'overlay-img';
-      img.style.zIndex = zIdx++;
-      preview.appendChild(img);
-    });
-
-    // Trunk-open overlay when trunk is active
-    if (active.trunk) {
-      var trunkImg = document.createElement('img');
-      trunkImg.src = rawUrl(m.dir + '/' + m.prefix + 'trunk-open.png');
-      trunkImg.alt = 'trunk-open';
-      trunkImg.className = 'overlay-img';
-      trunkImg.style.zIndex = zIdx++;
-      preview.appendChild(trunkImg);
-    }
-
-    // Build overlay list from z-order (these render above trunk)
+    // Build overlay list from z-order
     var overlayFiles = [];
     var nfNrKey = m.prefix + 'nf-nr-combined-overlay.png';
     var ffFrKey = m.prefix + 'ff-fr-combined-overlay.png';
@@ -318,7 +295,7 @@
       overlayFiles.push(m.prefix + name + '-overlay.png');
     });
 
-    // Stack overlays with incrementing z-index (above trunk)
+    // Stack overlays with incrementing z-index
     overlayFiles.forEach(function (f) {
       var img = document.createElement('img');
       img.src = rawUrl(m.dir + '/' + f);
@@ -386,7 +363,8 @@
     var grid = document.getElementById('overlay-grid');
     grid.innerHTML = '';
     m.files.forEach(function (f) {
-      if (!f.isOverlay || !fileStatus[f.name] || !fileStatus[f.name].ok) return;
+      if (f.name === m.prefix + 'base.png') return; // skip base from thumbnails
+      if (!fileStatus[f.name] || !fileStatus[f.name].ok) return;
       var thumb = document.createElement('div');
       thumb.className = 'overlay-thumb';
       thumb.innerHTML = '<img src="' + rawUrl(m.dir + '/' + f.name) + '" loading="lazy" /><div class="label">' + f.name + '</div>';
