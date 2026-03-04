@@ -106,8 +106,6 @@
 
   if (!branch) {
     app.innerHTML = '<div class="error-msg">Missing <code>?branch=</code> parameter.<br><br>Example: <code>review.html?branch=submissions/3-3.1-red_multi_coat-a3f9</code></div>';
-  } else {
-    init();
   }
 
   function rawUrl(path) {
@@ -363,6 +361,9 @@
       grid.appendChild(thumb);
     });
   }
+
+  // Init after all definitions are ready
+  if (branch) init();
 </script>
 
 </body>
