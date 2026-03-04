@@ -170,6 +170,8 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
     var $btnResend = document.getElementById('btn-resend');
     var $btnBack1 = document.getElementById('btn-back-to-step1');
     var $btnDevSkip = document.getElementById('btn-dev-skip');
+    var isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    if (!isLocal) $btnDevSkip.hidden = true;
 
     var $uploadCombo = document.getElementById('upload-combo-label');
     var $uploadWizard = document.getElementById('upload-wizard');
