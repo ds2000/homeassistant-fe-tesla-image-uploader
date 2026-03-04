@@ -1302,11 +1302,11 @@ function ghApi(method, path, body) {
 
     // Fetch models.json (from card repo) and status.json in parallel
     Promise.all([
-        fetch(MODELS_URL).then(function (r) {
+        fetch(cacheBust(MODELS_URL)).then(function (r) {
             if (!r.ok) throw new Error('Failed to load models.json');
             return r.json();
         }),
-        fetch(statusUrl).then(function (r) {
+        fetch(cacheBust(statusUrl)).then(function (r) {
             if (!r.ok) throw new Error('Failed to load status.json');
             return r.json();
         })
