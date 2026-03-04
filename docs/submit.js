@@ -1047,18 +1047,21 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
             img.onload = function () {
                 var canvas = document.createElement('canvas');
                 canvas.width = img.naturalWidth;
-                canvas.height = img.naturalHeight;
+                // Only scan the top 45% of the screenshot (car image area).
+                // The bottom half contains UI elements like "Charge Tip" text
+                // and green icons that appear in both plugged and unplugged states.
+                var scanHeight = Math.round(img.naturalHeight * 0.45);
+                canvas.height = scanHeight;
                 var ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0);
-                var data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+                ctx.drawImage(img, 0, 0, img.naturalWidth, scanHeight, 0, 0, img.naturalWidth, scanHeight);
+                var data = ctx.getImageData(0, 0, canvas.width, scanHeight).data;
                 var greenCount = 0;
-                var total = canvas.width * canvas.height;
+                var total = canvas.width * scanHeight;
                 for (var i = 0; i < data.length; i += 4) {
                     var r = data[i], g = data[i + 1], b = data[i + 2];
                     if (g > 60 && g > r + 15 && g > b + 10) greenCount++;
                 }
                 URL.revokeObjectURL(img.src);
-                // Full screenshot: cable + lightning icons + "Charge Tip" text ≈ 0.1%+
                 resolve(greenCount / total > 0.001);
             };
             img.onerror = function () {
@@ -1360,21 +1363,9 @@ function ghApi(method, path, body) {
             pre.textContent = msg;
             $uploadError.appendChild(pre);
 
-            var confirmBtn = document.createElement('button');
-            confirmBtn.className = 'btn';
-            confirmBtn.textContent = 'Submit anyway';
-            confirmBtn.style.marginTop = '8px';
-            confirmBtn.style.marginRight = '8px';
-            confirmBtn.addEventListener('click', function () {
-                hideUploadError();
-                validationConfirmed = true;
-                $btnSubmit.click();
-            });
-
             var fixBtn = document.createElement('button');
             fixBtn.className = 'btn btn-primary';
             fixBtn.textContent = 'Fix issues';
-            fixBtn.style.marginTop = '8px';
             fixBtn.addEventListener('click', function () {
                 hideUploadError();
                 $btnSubmit.disabled = false;
@@ -1387,6 +1378,15 @@ function ghApi(method, path, body) {
                         break;
                     }
                 }
+            });
+
+            var confirmBtn = document.createElement('button');
+            confirmBtn.className = 'btn btn-secondary';
+            confirmBtn.textContent = 'Submit anyway';
+            confirmBtn.addEventListener('click', function () {
+                hideUploadError();
+                validationConfirmed = true;
+                $btnSubmit.click();
             });
 
             $uploadError.appendChild(fixBtn);
