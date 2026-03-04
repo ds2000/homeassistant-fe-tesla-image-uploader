@@ -142,9 +142,8 @@ jobs:
         env:
           SUBMISSION_DIR: ${{ steps.detect.outputs.submission_dir }}
         run: |
-          LINE_COUNT=$(wc -l < scripts/align_images.py)
-          if [ "$LINE_COUNT" -le 5 ]; then
-            echo "::notice::align_images.py is a stub ($LINE_COUNT lines) — skipping"
+          if [ ! -f scripts/align_images.py ] || [ "$(wc -l < scripts/align_images.py)" -le 5 ]; then
+            echo "::notice::align_images.py not found or is a stub — skipping"
             echo "skipped=true" >> "$GITHUB_OUTPUT"
           else
             python scripts/align_images.py \
@@ -161,9 +160,8 @@ jobs:
         env:
           SUBMISSION_DIR: ${{ steps.detect.outputs.submission_dir }}
         run: |
-          LINE_COUNT=$(wc -l < scripts/desaturate_body.py)
-          if [ "$LINE_COUNT" -le 5 ]; then
-            echo "::notice::desaturate_body.py is a stub ($LINE_COUNT lines) — skipping"
+          if [ ! -f scripts/desaturate_body.py ] || [ "$(wc -l < scripts/desaturate_body.py)" -le 5 ]; then
+            echo "::notice::desaturate_body.py not found or is a stub — skipping"
             echo "skipped=true" >> "$GITHUB_OUTPUT"
           else
             python scripts/desaturate_body.py \
@@ -178,9 +176,8 @@ jobs:
         env:
           SUBMISSION_DIR: ${{ steps.detect.outputs.submission_dir }}
         run: |
-          LINE_COUNT=$(wc -l < scripts/generate_preview.py)
-          if [ "$LINE_COUNT" -le 5 ]; then
-            echo "::notice::generate_preview.py is a stub ($LINE_COUNT lines) — skipping"
+          if [ ! -f scripts/generate_preview.py ] || [ "$(wc -l < scripts/generate_preview.py)" -le 5 ]; then
+            echo "::notice::generate_preview.py not found or is a stub — skipping"
             echo "skipped=true" >> "$GITHUB_OUTPUT"
           else
             python scripts/generate_preview.py \
@@ -282,7 +279,7 @@ jobs:
           PR_URL=$(gh pr create \
             --title "$TITLE" \
             --body-file pr_body.md \
-            --base main \
+            --base TESUPL0001 \
             --head "$HEAD_REF")
 
           PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
@@ -300,7 +297,7 @@ jobs:
           STATUS_KEY="${MODEL}/${VARIANT}/${COLOUR}"
 
           # Checkout main to update status.json
-          git checkout main
+          git checkout TESUPL0001
 
           # Update status.json using flat key format
           jq --arg key "$STATUS_KEY" --argjson pr "$PR_NUMBER" \
@@ -314,4 +311,4 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git commit -m "status: mark ${STATUS_KEY} as pending (PR #${PR_NUMBER})"
-          git push origin main
+          git push origin TESUPL0001
