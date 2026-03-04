@@ -176,7 +176,7 @@ jobs:
             -H "Authorization: Bearer $RESEND_API_KEY" \
             -H "Content-Type: application/json" \
             -d "$(jq -n \
-              --arg from "Tesla Card Uploader <onboarding@resend.dev>" \
+              --arg from "Tesla Card Uploader <noreply@nythtech.com>" \
               --arg to "$EMAIL" \
               --arg subject "Verify your Tesla card image submission" \
               --arg html "$HTML_BODY" \
