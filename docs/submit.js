@@ -1108,8 +1108,8 @@ function ghApi(method, path, body) {
             hideUploadError();
             setUploadProgress('Getting repository info...', 0);
 
-            // 1. Get main branch HEAD SHA
-            var mainRef = await ghApi('GET', '/repos/' + REPO + '/git/ref/heads/main');
+            // 1. Get default branch HEAD SHA
+            var mainRef = await ghApi('GET', '/repos/' + REPO + '/git/ref/heads/TESUPL0001');
             var headSha = mainRef.object.sha;
 
             // 2. Get base tree SHA from the HEAD commit
