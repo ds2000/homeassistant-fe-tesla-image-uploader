@@ -198,6 +198,7 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
 
     var modelsData = null;   // from card repo models.json
     var statusData = null;   // flat status map {path: {status, pr?}}
+    var statusUrl = null;    // resolved at init, used by refreshStatus()
     var selection = { model: '', variant: '', colour: '' };
     var verificationToken = '';
     var uploadedFiles = {};
@@ -217,6 +218,17 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
         var c = findColour(modelId, variantId, colourId);
         if (c && c.hasImages) return { status: 'complete' };
         return { status: 'available' };
+    }
+
+    // Re-fetch models.json + status.json to get latest availability
+    function refreshStatus() {
+        return Promise.all([
+            fetch(MODELS_URL).then(function (r) { return r.ok ? r.json() : modelsData; }),
+            fetch(statusUrl).then(function (r) { return r.ok ? r.json() : statusData; })
+        ]).then(function (results) {
+            modelsData = results[0];
+            statusData = results[1];
+        });
     }
 
     function findModel(id) {
@@ -1131,9 +1143,31 @@ function ghApi(method, path, body) {
     $colour.addEventListener('change', onColourChange);
 
     $btnStep2.addEventListener('click', function () {
-        $verifyCombo.textContent = comboLabel();
-        showVerifyForm();
-        setStep(2);
+        $btnStep2.disabled = true;
+        $btnStep2.textContent = 'Checking availability…';
+        refreshStatus().then(function () {
+            var entry = getStatus(selection.model, selection.variant, selection.colour);
+            if (entry.status !== 'available') {
+                // Colour became unavailable since page load — refresh the dropdown
+                populateColours();
+                $colour.value = selection.colour;
+                onColourChange();
+                $btnStep2.textContent = 'Continue';
+                return;
+            }
+            $btnStep2.disabled = false;
+            $btnStep2.textContent = 'Continue';
+            $verifyCombo.textContent = comboLabel();
+            showVerifyForm();
+            setStep(2);
+        }).catch(function () {
+            // Network error — let them proceed with stale data
+            $btnStep2.disabled = false;
+            $btnStep2.textContent = 'Continue';
+            $verifyCombo.textContent = comboLabel();
+            showVerifyForm();
+            setStep(2);
+        });
     });
 
     $inputEmail.addEventListener('input', function () {
@@ -1211,7 +1245,7 @@ function ghApi(method, path, body) {
     var hasCallback = checkVerificationCallback();
 
     // Determine base URL for status.json — works on GitHub Pages and local dev
-    var statusUrl = (function () {
+    statusUrl = (function () {
         var host = window.location.hostname;
         if (host === 'localhost' || host === '127.0.0.1') {
             return 'status.json';
