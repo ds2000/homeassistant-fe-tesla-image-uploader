@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Submission Review</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0d0d0d; color: #eee;
+      font-family: 'Gotham', 'Century Gothic', 'Segoe UI', system-ui, sans-serif;
+      font-size: 14px; padding: 24px;
+    }
+    h1 { font-size: 18px; margin-bottom: 4px; color: #fff; font-weight: 600; }
+    .subtitle { color: rgba(255,255,255,0.4); font-size: 13px; margin-bottom: 20px; }
+
+    .mode-row { display: flex; gap: 6px; margin-bottom: 16px; align-items: center; }
+    .mode-btn {
+      padding: 6px 14px; border-radius: 6px;
+      border: 2px solid rgba(255,255,255,0.15);
+      background: rgba(255,255,255,0.05); color: #fff;
+      cursor: pointer; font-size: 12px; font-weight: 600;
+      transition: all 0.12s;
+    }
+    .mode-btn:hover { background: rgba(255,255,255,0.12); }
+    .mode-btn.active { border-color: #e82127; background: rgba(232,33,39,0.15); color: #e82127; }
+
+    .layout { display: flex; gap: 32px; flex-wrap: wrap; }
+    .col-preview { flex: 0 0 auto; }
+    .col-files { flex: 1; min-width: 280px; }
+
+    /* Toggle buttons */
+    .toggle-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+    .toggle-btn {
+      padding: 8px 18px; border-radius: 6px;
+      border: 2px solid rgba(255,255,255,0.15);
+      background: rgba(255,255,255,0.05); color: #fff;
+      cursor: pointer; font-size: 13px; font-weight: 600;
+      transition: all 0.12s; min-width: 60px; text-align: center;
+    }
+    .toggle-btn:hover { background: rgba(255,255,255,0.12); }
+    .toggle-btn.active { border-color: #e82127; background: rgba(232,33,39,0.15); color: #e82127; }
+
+    /* Preview area */
+    .preview {
+      position: relative; width: 417px; height: 262px;
+      background: #161719; border-radius: 8px; overflow: hidden;
+      margin-bottom: 8px;
+    }
+    .preview img {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      object-fit: contain; display: block;
+    }
+    .preview .overlay-img { pointer-events: none; }
+    .preview-info { font-size: 11px; color: rgba(255,255,255,0.35); margin-bottom: 20px; word-break: break-all; }
+
+    /* File status */
+    .summary { margin-bottom: 12px; font-size: 13px; }
+    .pass { color: #2ecc71; }
+    .fail { color: #e74c3c; }
+    .muted { color: rgba(255,255,255,0.35); }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 16px; }
+    th, td { text-align: left; padding: 5px 10px; font-size: 12px; }
+    th { color: rgba(255,255,255,0.4); border-bottom: 1px solid rgba(255,255,255,0.1); }
+    td { border-bottom: 1px solid rgba(255,255,255,0.05); }
+    .status-ok { color: #2ecc71; }
+    .status-fail { color: #e74c3c; }
+    .status-na { color: rgba(255,255,255,0.25); }
+
+    /* Overlay grid */
+    .overlay-grid { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; }
+    .overlay-thumb {
+      width: 140px; border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px; overflow: hidden; background: #1a1a1a;
+    }
+    .overlay-thumb img {
+      width: 100%; height: 86px; object-fit: contain; display: block;
+      background: repeating-conic-gradient(#333 0% 25%, #222 0% 50%) 50% / 12px 12px;
+    }
+    .overlay-thumb .label { padding: 3px 6px; font-size: 9px; color: rgba(255,255,255,0.5); }
+
+    .error-msg {
+      background: rgba(232,33,39,0.1); border: 1px solid rgba(232,33,39,0.3);
+      border-radius: 8px; padding: 20px; color: #e82127; max-width: 500px;
+    }
+    .error-msg code { color: #fff; }
+
+    @keyframes chargePulse {
+      0%, 100% { filter: brightness(1) drop-shadow(0 0 6px rgba(34,197,94,0.3)); }
+      50%      { filter: brightness(1.5) drop-shadow(0 0 14px rgba(34,197,94,0.9)); }
+    }
+    .charging-glow { animation: chargePulse 2s ease-in-out infinite; }
+    .mode-btn.active-green { border-color: #22c55e; background: rgba(34,197,94,0.15); color: #22c55e; }
+  </style>
+</head>
+<body>
+
+<div id="app"></div>
+
+<script>
+  var REPO = 'ds2000/homeassistant-fe-tesla-image-uploader';
+  var params = new URLSearchParams(window.location.search);
+  var branch = params.get('branch');
+
+  var app = document.getElementById('app');
+
+  if (!branch) {
+    app.innerHTML = '<div class="error-msg">Missing <code>?branch=</code> parameter.<br><br>Example: <code>review.html?branch=submissions/3-3.1-red_multi_coat-a3f9</code></div>';
+  } else {
+    init();
+  }
+
+  function rawUrl(path) {
+    return 'https://raw.githubusercontent.com/' + REPO + '/' + encodeURIComponent(branch) + '/' + path;
+  }
+
+  var MODES = {
+    offcharge: {
+      dir: 'processed/offcharge/overlays',
+      files: [
+        { name: 'base.png', required: true, isOverlay: false },
+        { name: 'trunk-open.png', required: true, isOverlay: false },
+        { name: 'chargeport-overlay.png', required: true, isOverlay: true },
+        { name: 'frunk-overlay.png', required: true, isOverlay: true },
+        { name: 'fr-overlay.png', required: true, isOverlay: true },
+        { name: 'ff-overlay.png', required: true, isOverlay: true },
+        { name: 'nr-overlay.png', required: true, isOverlay: true },
+        { name: 'nf-overlay.png', required: true, isOverlay: true },
+        { name: 'nf-nr-combined-overlay.png', required: false, isOverlay: true },
+        { name: 'ff-fr-combined-overlay.png', required: false, isOverlay: true }
+      ],
+      toggles: [
+        { id: 'trunk', label: 'Trunk' },
+        { id: 'chargeport', label: 'Chargeport' },
+        { id: 'frunk', label: 'Frunk' },
+        { id: 'nf', label: 'NF' },
+        { id: 'nr', label: 'NR' },
+        { id: 'ff', label: 'FF' },
+        { id: 'fr', label: 'FR' }
+      ],
+      zOrder: ['chargeport', 'frunk', 'fr', 'ff', 'nr', 'nf'],
+      combined: { 'nf+nr': 'nf-nr-combined-overlay.png', 'ff+fr': 'ff-fr-combined-overlay.png' },
+      prefix: ''
+    },
+    oncharge: {
+      dir: 'processed/oncharge/overlays',
+      files: [
+        { name: 'oncharge-base.png', required: true, isOverlay: false },
+        { name: 'oncharge-trunk-open.png', required: true, isOverlay: false },
+        { name: 'oncharge-frunk-overlay.png', required: true, isOverlay: true },
+        { name: 'oncharge-fr-overlay.png', required: true, isOverlay: true },
+        { name: 'oncharge-nr-overlay.png', required: true, isOverlay: true },
+        { name: 'oncharge-nf-overlay.png', required: true, isOverlay: true },
+        { name: 'oncharge-nf-nr-combined-overlay.png', required: false, isOverlay: true },
+        { name: 'oncharge-cable-overlay.png', required: false, isOverlay: true, isCable: true }
+      ],
+      toggles: [
+        { id: 'trunk', label: 'Trunk' },
+        { id: 'frunk', label: 'Frunk' },
+        { id: 'nf', label: 'NF' },
+        { id: 'nr', label: 'NR' },
+        { id: 'fr', label: 'FR' }
+      ],
+      zOrder: ['frunk', 'nf', 'nr', 'fr'],
+      combined: { 'nf+nr': 'oncharge-nf-nr-combined-overlay.png' },
+      prefix: 'oncharge-'
+    }
+  };
+
+  var chargingMode = false;
+  var chargingActive = false;
+  var active = {};
+  var fileStatus = {};
+
+  function mode() { return chargingMode ? MODES.oncharge : MODES.offcharge; }
+
+  function resetActive() {
+    active = {};
+    mode().toggles.forEach(function (t) { active[t.id] = false; });
+  }
+
+  function testImage(url) {
+    return new Promise(function (resolve) {
+      var img = new Image();
+      img.onload = function () { resolve({ ok: true, w: img.naturalWidth, h: img.naturalHeight }); };
+      img.onerror = function () { resolve({ ok: false, w: 0, h: 0 }); };
+      img.src = url + '?t=' + Date.now();
+    });
+  }
+
+  function init() {
+    resetActive();
+
+    app.innerHTML =
+      '<h1 id="title">Submission Review</h1>' +
+      '<div class="subtitle" id="subtitle"></div>' +
+      '<div class="mode-row">' +
+        '<button id="btn-offcharge" class="mode-btn active">Offcharge</button>' +
+        '<button id="btn-oncharge" class="mode-btn">On-charge</button>' +
+        '<button id="btn-charging" class="mode-btn">&#9889; Charging</button>' +
+      '</div>' +
+      '<div class="summary" id="summary">Loading files...</div>' +
+      '<div class="layout">' +
+        '<div class="col-preview">' +
+          '<div class="toggle-row" id="toggles"></div>' +
+          '<div class="preview" id="preview"></div>' +
+          '<div class="preview-info" id="preview-info"></div>' +
+          '<div class="overlay-grid" id="overlay-grid"></div>' +
+        '</div>' +
+        '<div class="col-files">' +
+          '<table><thead><tr><th>File</th><th>Status</th><th>Size</th></tr></thead>' +
+          '<tbody id="file-tbody"></tbody></table>' +
+        '</div>' +
+      '</div>';
+
+    document.getElementById('subtitle').textContent = 'Branch: ' + branch;
+
+    document.getElementById('btn-offcharge').addEventListener('click', function () { switchMode(false); });
+    document.getElementById('btn-oncharge').addEventListener('click', function () { switchMode(true); });
+    document.getElementById('btn-charging').addEventListener('click', function () {
+      chargingActive = !chargingActive;
+      this.classList.toggle('active-green', chargingActive);
+      updatePreview();
+    });
+
+    buildToggles();
+    updatePreview();
+    runTests();
+  }
+
+  function switchMode(charging) {
+    chargingMode = charging;
+    resetActive();
+    buildToggles();
+    runTests();
+    updatePreview();
+    document.getElementById('btn-offcharge').classList.toggle('active', !charging);
+    document.getElementById('btn-oncharge').classList.toggle('active', charging);
+  }
+
+  function buildToggles() {
+    var container = document.getElementById('toggles');
+    container.innerHTML = '';
+    var m = mode();
+    m.toggles.forEach(function (t) {
+      var btn = document.createElement('button');
+      btn.className = 'toggle-btn' + (active[t.id] ? ' active' : '');
+      btn.textContent = t.label;
+      btn.addEventListener('click', function () {
+        active[t.id] = !active[t.id];
+        btn.classList.toggle('active', active[t.id]);
+        updatePreview();
+      });
+      container.appendChild(btn);
+    });
+  }
+
+  function updatePreview() {
+    var m = mode();
+    var preview = document.getElementById('preview');
+    preview.innerHTML = '';
+
+    var baseFile = active.trunk ? m.prefix + 'trunk-open.png' : m.prefix + 'base.png';
+    var baseImg = document.createElement('img');
+    baseImg.src = rawUrl(m.dir + '/' + baseFile);
+    baseImg.alt = baseFile;
+    preview.appendChild(baseImg);
+
+    var overlayFiles = [];
+    var nfNrKey = m.prefix + 'nf-nr-combined-overlay.png';
+    var ffFrKey = m.prefix + 'ff-fr-combined-overlay.png';
+    var hasNfNrCombined = active.nf && active.nr && fileStatus[nfNrKey] && fileStatus[nfNrKey].ok;
+    var hasFfFrCombined = active.ff && active.fr && fileStatus[ffFrKey] && fileStatus[ffFrKey].ok;
+
+    var nfNrFirstSeen = false;
+    var ffFrFirstSeen = false;
+
+    m.zOrder.forEach(function (name) {
+      if (!active[name]) return;
+
+      if ((name === 'nf' || name === 'nr') && hasNfNrCombined) {
+        if (nfNrFirstSeen) overlayFiles.push(m.combined['nf+nr']);
+        nfNrFirstSeen = true;
+        return;
+      }
+      if ((name === 'ff' || name === 'fr') && hasFfFrCombined) {
+        if (ffFrFirstSeen) overlayFiles.push(m.combined['ff+fr']);
+        ffFrFirstSeen = true;
+        return;
+      }
+
+      overlayFiles.push(m.prefix + name + '-overlay.png');
+    });
+
+    overlayFiles.forEach(function (f) {
+      var img = document.createElement('img');
+      img.src = rawUrl(m.dir + '/' + f);
+      img.alt = f;
+      img.className = 'overlay-img';
+      preview.appendChild(img);
+    });
+
+    if (chargingActive && chargingMode && fileStatus['oncharge-cable-overlay.png'] && fileStatus['oncharge-cable-overlay.png'].ok) {
+      var cableImg = document.createElement('img');
+      cableImg.src = rawUrl(MODES.oncharge.dir + '/oncharge-cable-overlay.png');
+      cableImg.alt = 'cable';
+      cableImg.className = 'overlay-img charging-glow';
+      preview.appendChild(cableImg);
+    }
+
+    var activeNames = m.toggles.filter(function (t) { return active[t.id]; }).map(function (t) { return t.id; });
+    var info = activeNames.length ? baseFile + ' + ' + overlayFiles.join(' + ') : baseFile;
+    document.getElementById('preview-info').textContent = info;
+  }
+
+  function runTests() {
+    var m = mode();
+    var tbody = document.getElementById('file-tbody');
+    tbody.innerHTML = '';
+    fileStatus = {};
+
+    var passed = 0, failed = 0, total = m.files.length;
+    var pending = total;
+
+    m.files.forEach(function (f) {
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + f.name + '</td><td class="muted">...</td><td></td>';
+      tbody.appendChild(tr);
+
+      testImage(rawUrl(m.dir + '/' + f.name)).then(function (result) {
+        fileStatus[f.name] = result;
+        var sizeStr = result.ok ? result.w + '\u00d7' + result.h : '\u2014';
+        var statusClass = result.ok ? 'status-ok' : (f.required ? 'status-fail' : 'status-na');
+        var statusText = result.ok ? '\u2713' : (f.required ? '\u2715 MISSING' : '\u2014 optional');
+        tr.innerHTML = '<td>' + f.name + '</td><td class="' + statusClass + '">' + statusText + '</td><td>' + sizeStr + '</td>';
+
+        if (result.ok) passed++;
+        else if (f.required) failed++;
+
+        pending--;
+        if (pending === 0) {
+          var modeLabel = chargingMode ? ' (on-charge)' : ' (offcharge)';
+          document.getElementById('summary').innerHTML =
+            '<span class="pass">' + passed + ' files loaded</span>' +
+            (failed ? ' \u00b7 <span class="fail">' + failed + ' MISSING</span>' : '') +
+            ' \u00b7 <span class="muted">' + total + ' total' + modeLabel + '</span>';
+          buildOverlayGrid();
+          updatePreview();
+        }
+      });
+    });
+  }
+
+  function buildOverlayGrid() {
+    var m = mode();
+    var grid = document.getElementById('overlay-grid');
+    grid.innerHTML = '';
+    m.files.forEach(function (f) {
+      if (!f.isOverlay || !fileStatus[f.name] || !fileStatus[f.name].ok) return;
+      var thumb = document.createElement('div');
+      thumb.className = 'overlay-thumb';
+      thumb.innerHTML = '<img src="' + rawUrl(m.dir + '/' + f.name) + '" loading="lazy" /><div class="label">' + f.name + '</div>';
+      grid.appendChild(thumb);
+    });
+  }
+</script>
+
+</body>
+</html>

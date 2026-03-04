@@ -193,6 +193,7 @@ jobs:
           DESAT_OUTCOME: ${{ steps.desaturate.outcome }}
           PREVIEW_SKIPPED: ${{ steps.preview.outputs.skipped }}
           PREVIEW_OUTCOME: ${{ steps.preview.outcome }}
+          HEAD_REF: ${{ github.ref_name }}
         run: |
           # Build validation summary from report
           PASSED=$(jq -r '.passed' validation_report.json 2>/dev/null || echo "?")
@@ -212,9 +213,15 @@ jobs:
             fi
           fi
 
+          # Build review URL
+          REVIEW_URL="https://homeassistant-fe-tesla-image-uploader.pages.dev/review.html?branch=${HEAD_REF}"
+
           # Write PR body to file using heredoc
           cat > pr_body.md <<PREOF
           ## Submission: ${MODEL_LABEL} ${VARIANT_LABEL} — ${COLOUR_LABEL}
+
+          ### Review
+          [Open interactive review](${REVIEW_URL}) — toggle doors on/off to verify overlays.
 
           ### Validation
           $(if [ "$VALIDATION_PASSED" = "true" ]; then
