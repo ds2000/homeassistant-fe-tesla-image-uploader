@@ -1028,6 +1028,91 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
 
     function hideUploadError() {
         $uploadError.hidden = true;
+        $uploadError.innerHTML = '';
+    }
+
+    // ── Pre-submit validation: detect charging cable + duplicates ──────
+    // Green cable detection mirrors process_screenshots.py: G>80, G>R+30, G>B+15
+    function detectChargingCable(file) {
+        return new Promise(function (resolve) {
+            var img = new Image();
+            img.onload = function () {
+                var canvas = document.createElement('canvas');
+                canvas.width = img.naturalWidth;
+                canvas.height = img.naturalHeight;
+                var ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                var data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+                var greenCount = 0;
+                var total = canvas.width * canvas.height;
+                for (var i = 0; i < data.length; i += 4) {
+                    var r = data[i], g = data[i + 1], b = data[i + 2];
+                    if (g > 80 && g > r + 30 && g > b + 15) greenCount++;
+                }
+                URL.revokeObjectURL(img.src);
+                // Cable typically covers >0.5% of pixels
+                resolve(greenCount / total > 0.005);
+            };
+            img.onerror = function () {
+                URL.revokeObjectURL(img.src);
+                resolve(false);
+            };
+            img.src = URL.createObjectURL(file);
+        });
+    }
+
+    // Side-view keys that should (oncharge) or should not (offcharge) have a cable
+    var OFFCHARGE_SIDE_KEYS = ['closed', 'chargeport', 'frunk', 'trunk',
+                                'front_doors', 'rear_doors', 'all_doors'];
+    var ONCHARGE_KEYS = ['oc_closed', 'oc_frunk', 'oc_trunk',
+                          'oc_front_doors', 'oc_rear_doors', 'oc_all_doors'];
+
+    function validateUploads() {
+        var checks = [];
+        var keys = Object.keys(uploadedFiles);
+
+        // Cable detection checks
+        keys.forEach(function (key) {
+            var isOncharge = ONCHARGE_KEYS.indexOf(key) !== -1;
+            var isOffchargeSide = OFFCHARGE_SIDE_KEYS.indexOf(key) !== -1;
+            if (!isOncharge && !isOffchargeSide) return; // skip panels
+            checks.push(
+                detectChargingCable(uploadedFiles[key]).then(function (hasCable) {
+                    if (isOncharge && !hasCable) {
+                        var layer = LAYERS.filter(function (l) { return l.key === key; })[0];
+                        return { key: key, label: layer ? layer.label : key, issue: 'missing cable — is this an on-charge screenshot?' };
+                    }
+                    if (isOffchargeSide && hasCable) {
+                        var layer = LAYERS.filter(function (l) { return l.key === key; })[0];
+                        return { key: key, label: layer ? layer.label : key, issue: 'charging cable detected — this should be an unplugged screenshot' };
+                    }
+                    return null;
+                })
+            );
+        });
+
+        // Duplicate detection via file size (quick heuristic)
+        var sizeMap = {};
+        keys.forEach(function (key) {
+            var size = uploadedFiles[key].size;
+            if (!sizeMap[size]) sizeMap[size] = [];
+            sizeMap[size].push(key);
+        });
+        var dupeWarnings = [];
+        Object.keys(sizeMap).forEach(function (size) {
+            if (sizeMap[size].length > 1) {
+                var labels = sizeMap[size].map(function (k) {
+                    var layer = LAYERS.filter(function (l) { return l.key === k; })[0];
+                    return layer ? layer.label + ' (' + (layer.section || '') + ')' : k;
+                });
+                dupeWarnings.push({ key: sizeMap[size][0], label: labels.join(', '), issue: 'possible duplicates — same file size' });
+            }
+        });
+
+        return Promise.all(checks).then(function (results) {
+            var issues = results.filter(function (r) { return r !== null; });
+            return issues.concat(dupeWarnings);
+        });
     }
 
     function showUploadSuccess(branchName) {
@@ -1238,7 +1323,75 @@ function ghApi(method, path, body) {
         });
     }
 
-    $btnSubmit.addEventListener('click', submitToGitHub);
+    var validationConfirmed = false;
+    $btnSubmit.addEventListener('click', function () {
+        if (validationConfirmed) {
+            validationConfirmed = false;
+            submitToGitHub();
+            return;
+        }
+
+        $btnSubmit.disabled = true;
+        $btnSubmit.textContent = 'Checking images...';
+        hideUploadError();
+
+        validateUploads().then(function (issues) {
+            if (issues.length === 0) {
+                $btnSubmit.disabled = false;
+                $btnSubmit.textContent = 'Submit images';
+                submitToGitHub();
+                return;
+            }
+
+            // Show issues and ask for confirmation
+            var msg = 'Potential issues found:\n';
+            issues.forEach(function (issue) {
+                msg += '\u2022 ' + issue.label + ': ' + issue.issue + '\n';
+            });
+
+            $uploadError.innerHTML = '';
+            var pre = document.createElement('div');
+            pre.style.whiteSpace = 'pre-line';
+            pre.textContent = msg;
+            $uploadError.appendChild(pre);
+
+            var confirmBtn = document.createElement('button');
+            confirmBtn.className = 'btn';
+            confirmBtn.textContent = 'Submit anyway';
+            confirmBtn.style.marginTop = '8px';
+            confirmBtn.style.marginRight = '8px';
+            confirmBtn.addEventListener('click', function () {
+                hideUploadError();
+                validationConfirmed = true;
+                $btnSubmit.click();
+            });
+
+            var fixBtn = document.createElement('button');
+            fixBtn.className = 'btn btn-primary';
+            fixBtn.textContent = 'Fix issues';
+            fixBtn.style.marginTop = '8px';
+            fixBtn.addEventListener('click', function () {
+                hideUploadError();
+                $btnSubmit.disabled = false;
+                $btnSubmit.textContent = 'Submit images';
+                // Navigate to first problematic slot
+                var firstKey = issues[0].key;
+                for (var i = 0; i < LAYERS.length; i++) {
+                    if (LAYERS[i].key === firstKey) {
+                        goToLayer(i);
+                        break;
+                    }
+                }
+            });
+
+            $uploadError.appendChild(fixBtn);
+            $uploadError.appendChild(confirmBtn);
+            $uploadError.hidden = false;
+
+            $btnSubmit.disabled = false;
+            $btnSubmit.textContent = 'Submit images';
+        });
+    });
 
     $btnUploadPrev.addEventListener('click', function () {
         goToLayer(currentLayerIndex - 1);
