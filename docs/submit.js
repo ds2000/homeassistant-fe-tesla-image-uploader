@@ -425,19 +425,20 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
 
                 var tokenHash = verificationToken + ':' + sig;
 
-return fetch(WORKER_API + '/dispatch', {
-    method: 'POST',
-    headers: {
-        'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-        email: email,
-        token_hash: tokenHash,
-        model: selection.model,
-        variant: selection.variant,
-        colour: selection.colour
-    })
-});
+                return fetch(WORKER_API + '/dispatch', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        email: email,
+                        token_hash: tokenHash,
+                        model: selection.model,
+                        variant: selection.variant,
+                        colour: selection.colour
+                    })
+                });
+            })
             .then(function (resp) {
                 if (!resp.ok) throw new Error('GitHub API returned ' + resp.status);
 
