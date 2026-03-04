@@ -1488,19 +1488,10 @@ function ghApi(method, path, body) {
         return WORKER_API + '/status';
     })();
 
-    // Fetch models.json (from card repo) and status.json in parallel
-    Promise.all([
-        fetch(cacheBust(MODELS_URL)).then(function (r) {
-            if (!r.ok) throw new Error('Failed to load models.json');
-            return r.json();
-        }),
-        fetch(cacheBust(statusUrl)).then(function (r) {
-            return r.ok ? r.json() : {};
-        })
-    ])
-    .then(function (results) {
-        modelsData = results[0];
-        statusData = results[1];
+    // Fetch models.json, status.json, and check open submission branches
+    refreshStatus()
+    .then(function () {
+        if (!modelsData) throw new Error('Failed to load models.json');
         populateModels();
 
         // If we didn't arrive via a callback link, check sessionStorage

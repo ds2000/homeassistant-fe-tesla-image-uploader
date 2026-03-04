@@ -102,56 +102,6 @@ jobs:
             --generate-overlays \
             --verbose
 
-      - name: Run alignment
-        id: align
-        continue-on-error: true
-        env:
-          SUBMISSION_DIR: ${{ steps.detect.outputs.submission_dir }}
-        run: |
-          if [ ! -f scripts/align_images.py ] || [ "$(wc -l < scripts/align_images.py)" -le 5 ]; then
-            echo "::notice::align_images.py not found or is a stub — skipping"
-            echo "skipped=true" >> "$GITHUB_OUTPUT"
-          else
-            python scripts/align_images.py \
-              --submission-dir "$SUBMISSION_DIR" \
-              --reference-dir reference/model3/ \
-              --output-dir aligned/ \
-              --confidence-report alignment_report.json
-            echo "skipped=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Run desaturation
-        id: desaturate
-        continue-on-error: true
-        env:
-          SUBMISSION_DIR: ${{ steps.detect.outputs.submission_dir }}
-        run: |
-          if [ ! -f scripts/desaturate_body.py ] || [ "$(wc -l < scripts/desaturate_body.py)" -le 5 ]; then
-            echo "::notice::desaturate_body.py not found or is a stub — skipping"
-            echo "skipped=true" >> "$GITHUB_OUTPUT"
-          else
-            python scripts/desaturate_body.py \
-              --input-dir "$SUBMISSION_DIR" \
-              --output-dir desaturated/
-            echo "skipped=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Generate preview
-        id: preview
-        continue-on-error: true
-        env:
-          SUBMISSION_DIR: ${{ steps.detect.outputs.submission_dir }}
-        run: |
-          if [ ! -f scripts/generate_preview.py ] || [ "$(wc -l < scripts/generate_preview.py)" -le 5 ]; then
-            echo "::notice::generate_preview.py not found or is a stub — skipping"
-            echo "skipped=true" >> "$GITHUB_OUTPUT"
-          else
-            python scripts/generate_preview.py \
-              --input-dir "$SUBMISSION_DIR" \
-              --output preview.png
-            echo "skipped=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Commit processed output
         if: steps.validate.outputs.validation_passed == 'true'
         run: |
@@ -187,15 +137,8 @@ jobs:
           VARIANT_LABEL: ${{ steps.labels.outputs.variant_label }}
           COLOUR_LABEL: ${{ steps.labels.outputs.colour_label }}
           VALIDATION_PASSED: ${{ steps.validate.outputs.validation_passed }}
-          ALIGN_SKIPPED: ${{ steps.align.outputs.skipped }}
-          ALIGN_OUTCOME: ${{ steps.align.outcome }}
-          DESAT_SKIPPED: ${{ steps.desaturate.outputs.skipped }}
-          DESAT_OUTCOME: ${{ steps.desaturate.outcome }}
-          PREVIEW_SKIPPED: ${{ steps.preview.outputs.skipped }}
-          PREVIEW_OUTCOME: ${{ steps.preview.outcome }}
           HEAD_REF: ${{ github.ref_name }}
         run: |
-          # Build validation summary from report
           PASSED=$(jq -r '.passed' validation_report.json 2>/dev/null || echo "?")
           TOTAL=$(jq -r '.required_count' validation_report.json 2>/dev/null || echo "?")
           FAILED_FILES=""
@@ -203,20 +146,8 @@ jobs:
             FAILED_FILES=$(jq -r '.files[] | select(.error != null) | "- **\(.file)**: \(.error)"' validation_report.json 2>/dev/null || echo "")
           fi
 
-          # Alignment status
-          ALIGN_STATUS="Skipped (script not yet implemented)"
-          if [ "$ALIGN_SKIPPED" = "false" ]; then
-            if [ "$ALIGN_OUTCOME" = "success" ]; then
-              ALIGN_STATUS="Completed"
-            else
-              ALIGN_STATUS="Failed (see logs)"
-            fi
-          fi
-
-          # Build review URL
           REVIEW_URL="https://homeassistant-fe-tesla-image-uploader.pages.dev/review.html?branch=${HEAD_REF}"
 
-          # Write PR body to file using heredoc
           cat > pr_body.md <<PREOF
           ## Submission: ${MODEL_LABEL} ${VARIANT_LABEL} — ${COLOUR_LABEL}
 
@@ -231,17 +162,8 @@ jobs:
             echo ""
             echo "$FAILED_FILES"
           fi)
-
-          ### Processing Pipeline
-          | Step | Status |
-          |---|---|
-          | Validation | $([ "$VALIDATION_PASSED" = "true" ] && echo "Passed" || echo "**Failed**") |
-          | Alignment | ${ALIGN_STATUS} |
-          | Desaturation | $([ "$DESAT_SKIPPED" = "true" ] && echo "Skipped (stub)" || echo "$DESAT_OUTCOME") |
-          | Preview | $([ "$PREVIEW_SKIPPED" = "true" ] && echo "Skipped (stub)" || echo "$PREVIEW_OUTCOME") |
           PREOF
 
-          # Remove leading whitespace from heredoc
           sed -i 's/^          //' pr_body.md
 
       - name: Create Pull Request
@@ -250,14 +172,9 @@ jobs:
           MODEL_LABEL: ${{ steps.labels.outputs.model_label }}
           VARIANT_LABEL: ${{ steps.labels.outputs.variant_label }}
           COLOUR_LABEL: ${{ steps.labels.outputs.colour_label }}
-          VALIDATION_PASSED: ${{ steps.validate.outputs.validation_passed }}
           HEAD_REF: ${{ github.ref_name }}
         run: |
-          if [ "$VALIDATION_PASSED" = "true" ]; then
-            TITLE="submission: ${MODEL_LABEL} ${VARIANT_LABEL} — ${COLOUR_LABEL}"
-          else
-            TITLE="[needs fixes] submission: ${MODEL_LABEL} ${VARIANT_LABEL} — ${COLOUR_LABEL}"
-          fi
+          TITLE="submission: ${MODEL_LABEL} ${VARIANT_LABEL} — ${COLOUR_LABEL}"
 
           PR_URL=$(gh pr create \
             --title "$TITLE" \
