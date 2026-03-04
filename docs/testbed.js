@@ -299,7 +299,7 @@
 
     // Z-order constants (DOM order = paint order, later = on top)
     var Z_ORDER_OFFCHARGE = ['chargeport', 'frunk', 'fr', 'ff', 'nr', 'nf'];
-    var Z_ORDER_ONCHARGE = ['frunk', 'ff', 'fr', 'nf', 'nr'];
+    var Z_ORDER_ONCHARGE = ['fr', 'ff', 'frunk', 'nf', 'nr'];
 
     // Toggle definitions per mode
     var TOGGLE_DEFS = {

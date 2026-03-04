@@ -234,14 +234,39 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
         return { status: 'available' };
     }
 
-    // Re-fetch models.json + status.json to get latest availability
+    // Re-fetch models.json + status.json + open submission branches
     function refreshStatus() {
         return Promise.all([
             fetch(cacheBust(MODELS_URL)).then(function (r) { return r.ok ? r.json() : modelsData; }),
-            fetch(cacheBust(statusUrl)).then(function (r) { return r.ok ? r.json() : statusData; })
+            fetch(cacheBust(statusUrl)).then(function (r) { return r.ok ? r.json() : statusData; }),
+            // List open submission branches to catch in-flight submissions
+            ghApi('GET', '/repos/' + REPO + '/git/matching-refs/heads/submissions/')
+                .then(function (refs) { return Array.isArray(refs) ? refs : []; })
+                .catch(function () { return []; })
         ]).then(function (results) {
             modelsData = results[0];
             statusData = results[1];
+            // Parse branch names: submissions/{model}-{variant}-{colour}-{token}
+            // Mark any active branch as pending if not already in statusData
+            var refs = results[2];
+            refs.forEach(function (ref) {
+                var name = ref.ref.replace('refs/heads/submissions/', '');
+                // Strip trailing 4-char hex token
+                var withoutToken = name.replace(/-[0-9a-f]{4}$/, '');
+                // Split on first and second dash to get model, variant, colour
+                var firstDash = withoutToken.indexOf('-');
+                if (firstDash === -1) return;
+                var model = withoutToken.substring(0, firstDash);
+                var rest = withoutToken.substring(firstDash + 1);
+                var secondDash = rest.indexOf('-');
+                if (secondDash === -1) return;
+                var variant = rest.substring(0, secondDash);
+                var colour = rest.substring(secondDash + 1);
+                var key = model + '/' + variant + '/' + colour;
+                if (!statusData[key]) {
+                    statusData[key] = { status: 'pending' };
+                }
+            });
         });
     }
 
@@ -1245,7 +1270,10 @@ function ghApi(method, path, body) {
                 sha: commit.sha
             });
 
-            // Done
+            // Done — mark locally as pending so Start Over reflects it immediately
+            var statusKey = model + '/' + variant + '/' + colour;
+            statusData[statusKey] = { status: 'pending' };
+
             setUploadProgress('Done!', 100);
             showUploadSuccess(branchName);
 
