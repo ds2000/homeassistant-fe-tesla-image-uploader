@@ -96,7 +96,7 @@ jobs:
           COLOUR_LABEL=$(jq -r --arg m "$MODEL" --arg v "$VARIANT" --arg c "$COLOUR" \
             '.models[] | select(.id == $m) | .variants[] | select(.id == $v) | .colours[] | select(.id == $c) | .name' models.json)
 
-          VERIFY_URL="https://ds2000.github.io/homeassistant-fe-tesla-image-uploader/?token=${TOKEN}&sig=${SIG}&model=${MODEL}&variant=${VARIANT}&colour=${COLOUR}"
+          VERIFY_URL="https://homeassistant-fe-tesla-image-uploader.pages.dev/?token=${TOKEN}&sig=${SIG}&model=${MODEL}&variant=${VARIANT}&colour=${COLOUR}"
 
           # Build HTML email body
           HTML_BODY=$(cat <<'EMAILEOF'
