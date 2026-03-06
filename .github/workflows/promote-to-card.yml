@@ -4,10 +4,20 @@ name: Promote to Card
 on:
   pull_request:
     types: [closed]
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Submission branch (e.g. submissions/3-3.1-deep_blue_metallic-bd6d)'
+        required: true
+      pr_number:
+        description: 'Uploader PR number'
+        required: true
 
 jobs:
   promote:
-    if: github.event.pull_request.merged == true && startsWith(github.head_ref, 'submissions/')
+    if: >-
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event.pull_request.merged == true && startsWith(github.head_ref, 'submissions/'))
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GH_BOT_TOKEN }}
@@ -15,8 +25,9 @@ jobs:
       - name: Checkout uploader repo at merge commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.ref || github.event.pull_request.merge_commit_sha }}
           token: ${{ secrets.GH_BOT_TOKEN }}
+          fetch-depth: 0
 
       - name: Fetch models.json from card repo
         run: |
@@ -27,7 +38,7 @@ jobs:
       - name: Parse branch name
         id: parse
         env:
-          BRANCH: ${{ github.head_ref }}
+          BRANCH: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.branch || github.head_ref }}
         run: |
           # Strip submissions/ prefix
           DIR_NAME="${BRANCH#submissions/}"
@@ -226,7 +237,7 @@ jobs:
           MODEL: ${{ steps.parse.outputs.model }}
           VARIANT: ${{ steps.parse.outputs.variant }}
           COLOUR: ${{ steps.parse.outputs.colour }}
-          UPLOADER_PR: ${{ github.event.pull_request.number }}
+          UPLOADER_PR: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.pr_number || github.event.pull_request.number }}
         run: |
           BRANCH_NAME="images/${MODEL}-${VARIANT}-${COLOUR}"
           TITLE="images: ${MODEL_LABEL} ${VARIANT_LABEL} — ${COLOUR_LABEL}"
