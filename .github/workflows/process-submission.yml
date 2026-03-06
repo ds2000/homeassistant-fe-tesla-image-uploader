@@ -150,11 +150,22 @@ jobs:
 
           REVIEW_URL="https://homeassistant-fe-tesla-image-uploader.pages.dev/review.html?branch=${HEAD_REF}"
 
+          RAW_BASE="https://raw.githubusercontent.com/ds2000/homeassistant-fe-tesla-image-uploader/${HEAD_REF}"
+
           cat > pr_body.md <<PREOF
           ## Submission: ${MODEL_LABEL} ${VARIANT_LABEL} — ${COLOUR_LABEL}
 
           ### Review
           [Open interactive review](${REVIEW_URL}) — toggle doors on/off to verify overlays.
+
+          ### Overhead Views
+          | Controls | Climate |
+          |:---:|:---:|
+          | ![Controls](${RAW_BASE}/processed/offcharge/controls-bg.png) | ![Climate](${RAW_BASE}/processed/offcharge/climate-bg.png) |
+
+          | Controls (Charging) | Climate (Charging) |
+          |:---:|:---:|
+          | ![Controls Charging](${RAW_BASE}/processed/oncharge/controls-bg-charging.png) | ![Climate Charging](${RAW_BASE}/processed/oncharge/climate-bg-charging.png) |
 
           ### Validation
           $(if [ "$VALIDATION_PASSED" = "true" ]; then

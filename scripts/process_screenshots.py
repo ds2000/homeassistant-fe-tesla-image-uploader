@@ -731,10 +731,13 @@ def inpaint_controls_ui(car_img, car_mask, car_w, car_h):
     ch_range = max_ch.astype(int) - min_ch.astype(int)
     local_mean = cv2.blur(gray.astype(np.float64), (121, 121))
 
-    # Layer 1: Very bright achromatic elements on dark surfaces (catches "Open" text)
+    # Layer 1: Very bright achromatic elements on darker surfaces (catches "Open"/"Apri" text)
     # Threshold 100 preserves interior detail (gray 30-80) while catching text (gray 110+)
     # ch_range < 60 excludes colored elements like the green charging cable
-    dark_zone = local_mean < 55
+    # dark_zone threshold 80 handles brighter car colors (blue, silver) where the
+    # hood area has local_mean ~60-75 — a threshold of 55 would miss overlay text
+    # on these colors while the text is clearly UI (achromatic white on colored body)
+    dark_zone = local_mean < 80
     bright_text = ((gray.astype(np.float64) > 100) & dark_zone & (ch_range < 60)).astype(np.uint8) * 255
 
     # Layer 2: White overlay on body panels (catches "Open" on hood)
@@ -983,7 +986,6 @@ def process_controls_panel(img_path, target_size=CONTROLS_SIZE, verbose=False,
     arr = np.array(img)
     iw, ih = img.size
     bg_color = detect_background_color(arr)
-    non_bg = create_non_bg_mask(arr, bg_color)
 
     info = {
         "input_file": str(img_path),
@@ -993,24 +995,29 @@ def process_controls_panel(img_path, target_size=CONTROLS_SIZE, verbose=False,
         "success": False,
     }
 
-    car_bounds = find_car_bounds_panel(non_bg)
-    if car_bounds is None:
-        info["warnings"].append("Controls car detection failed")
-        return None, info
-
-    cx0, cy0, cx1, cy1 = car_bounds
-    info["car_bounds"] = list(car_bounds)
-
-    if verbose:
-        print(f"    Car bounds: ({cx0},{cy0})-({cx1},{cy1}) "
-              f"= {cx1-cx0}x{cy1-cy0}")
-
     # Convert to BGR for OpenCV processing
     img_bgr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
 
     # Get filled car mask (fills holes in glass areas)
     bg_uint8 = np.clip(bg_color, 0, 255).astype(np.uint8)
     car_mask = get_car_mask_filled(img_bgr, bg_uint8, threshold=12)
+
+    # Derive car bounds from the actual car mask.
+    # This correctly excludes UI text/icons (status bar, title, bottom buttons)
+    # that find_car_bounds_panel would include — critical for non-English UIs
+    # where longer text labels inflate the bounding box.
+    mask_ys, mask_xs = np.where(car_mask > 0)
+    if len(mask_ys) == 0:
+        info["warnings"].append("Controls car detection failed")
+        return None, info
+
+    cx0, cy0 = int(mask_xs.min()), int(mask_ys.min())
+    cx1, cy1 = int(mask_xs.max()), int(mask_ys.max())
+    info["car_bounds"] = [cx0, cy0, cx1, cy1]
+
+    if verbose:
+        print(f"    Car bounds: ({cx0},{cy0})-({cx1},{cy1}) "
+              f"= {cx1-cx0}x{cy1-cy0}")
 
     # Inpaint UI overlays (targeted: preserves interior glass detail)
     car_w = cx1 - cx0
@@ -1118,7 +1125,7 @@ def inpaint_climate_ui(img_bgr, car_mask, cx0, cy0, cx1, cy1):
         if aspect > 8:
             continue  # long edge reflection
         cy_rel = (cents[i][1] - cy0) / car_h
-        if cy_rel < 0.25:
+        if cy_rel < 0.20:
             continue  # preserve rearview mirror / overhead console
         if cy_rel > 0.75:
             continue  # avoid rear bumper area
@@ -1164,7 +1171,6 @@ def process_climate_panel(img_path, target_size=CLIMATE_SIZE, verbose=False,
     arr = np.array(img)
     iw, ih = img.size
     bg_color = detect_background_color(arr)
-    non_bg = create_non_bg_mask(arr, bg_color)
 
     info = {
         "input_file": str(img_path),
@@ -1174,20 +1180,6 @@ def process_climate_panel(img_path, target_size=CLIMATE_SIZE, verbose=False,
         "success": False,
     }
 
-    car_bounds = find_car_bounds_panel(non_bg)
-    if car_bounds is None:
-        info["warnings"].append("Climate car detection failed")
-        return None, info
-
-    cx0, cy0, cx1, cy1 = car_bounds
-    info["car_bounds"] = list(car_bounds)
-    car_h = cy1 - cy0
-    car_w = cx1 - cx0
-
-    if verbose:
-        print(f"    Car bounds: ({cx0},{cy0})-({cx1},{cy1}) "
-              f"= {car_w}x{car_h}")
-
     bg_uint8 = np.clip(bg_color, 0, 255).astype(np.uint8)
 
     # Convert to BGR for OpenCV processing
@@ -1195,6 +1187,25 @@ def process_climate_panel(img_path, target_size=CLIMATE_SIZE, verbose=False,
 
     # Get filled car mask (fills holes in glass/interior areas)
     car_mask = get_car_mask_filled(img_bgr, bg_uint8, threshold=12)
+
+    # Derive car bounds from the actual car mask.
+    # This correctly excludes UI text/icons (status bar, temperature display,
+    # HVAC controls) that find_car_bounds_panel would include — critical for
+    # non-English UIs where longer text labels inflate the bounding box.
+    mask_ys, mask_xs = np.where(car_mask > 0)
+    if len(mask_ys) == 0:
+        info["warnings"].append("Climate car detection failed")
+        return None, info
+
+    cx0, cy0 = int(mask_xs.min()), int(mask_ys.min())
+    cx1, cy1 = int(mask_xs.max()), int(mask_ys.max())
+    info["car_bounds"] = [cx0, cy0, cx1, cy1]
+    car_h = cy1 - cy0
+    car_w = cx1 - cx0
+
+    if verbose:
+        print(f"    Car bounds: ({cx0},{cy0})-({cx1},{cy1}) "
+              f"= {car_w}x{car_h}")
 
     # Inpaint UI overlays (seat heater icons, status bar, back button)
     inpainted = inpaint_climate_ui(img_bgr, car_mask, cx0, cy0, cx1, cy1)
@@ -2078,6 +2089,17 @@ def split_combined_doors(combined_img, base_img, mode="offcharge",
             if verbose:
                 print(f"    Cannot find valley or CC gap — "
                       f"splitting at midpoint x={split_x}")
+
+    # Sanity check: if the split point is in the outer 25% of the image,
+    # it's cutting through one door cluster rather than between two doors.
+    # This happens when one door is barely visible (e.g. far-front in
+    # oncharge rear 3/4 view).  Fall back to image center — the car is
+    # centered in the crop frame, so this naturally separates near/far sides.
+    if split_x < w * 0.25 or split_x > w * 0.75:
+        if verbose:
+            print(f"    Split x={split_x} in outer quartile — "
+                  f"correcting to image center x={w // 2}")
+        split_x = w // 2
 
     # ── Create left/right masks ──────────────────────────────────────────
     left_mask = mask.copy()
