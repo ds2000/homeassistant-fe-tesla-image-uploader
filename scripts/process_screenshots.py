@@ -330,72 +330,138 @@ def find_car_bounds_sideview(non_bg_mask):
 def compute_crop_frame_from_union(union_bounds, img_shape,
                                   target_size=SIDE_VIEW_SIZE,
                                   padding_pct=UNION_PADDING_PCT,
-                                  min_y0=0):
-    """Compute crop frame from the union of all car bounding boxes.
+                                  min_y0=0,
+                                  closed_bounds=None):
+    """Compute a standardized crop frame for side-view overlays.
 
-    Adds padding around the union and adjusts to maintain the target
-    aspect ratio. This ensures ALL side-view states (including trunk-open
-    which extends higher) fit within the same frame.
+    Centers on the closed-state car and scales so the car fills a fixed
+    proportion of the output frame.  This ensures all submissions of the
+    same model produce pixel-aligned overlays regardless of input
+    resolution or minor detection variance.
+
+    The union bounds are still used to guarantee every open-door state
+    fits within the frame.
 
     Args:
-        min_y0: Minimum allowed y-coordinate for the crop top. Used to
-            ensure the crop starts below UI elements (battery bar, etc.).
-            The crop frame is shifted down if needed.
+        closed_bounds: (x0, y0, x1, y1) of the all-closed car state.
+            Used for centering and scale.  Falls back to union_bounds.
+        min_y0: Minimum allowed y for crop top (battery bar avoidance).
     """
     ux0, uy0, ux1, uy1 = union_bounds
     ih, iw = img_shape[:2]
+    target_aspect = target_size[0] / target_size[1]  # w/h
 
+    # Reference bounds: closed car for consistent centering/scale
+    ref = closed_bounds if closed_bounds else union_bounds
+    rx0, ry0, rx1, ry1 = ref
+    car_cx = (rx0 + rx1) / 2
+    car_cy = (ry0 + ry1) / 2
+    car_w = rx1 - rx0
+
+    # Fixed car-to-frame ratio: car fills 73% of frame width.
+    car_fill = 0.73
+    frame_w = car_w / car_fill
+    frame_h = frame_w / target_aspect
+
+    # Ensure union bounds fit within frame (expand if needed)
     uw = ux1 - ux0
     uh = uy1 - uy0
+    min_pad_ratio = 1.06
+    if uw * min_pad_ratio > frame_w:
+        frame_w = uw * min_pad_ratio
+        frame_h = frame_w / target_aspect
+    if uh * min_pad_ratio > frame_h:
+        frame_h = uh * min_pad_ratio
+        frame_w = frame_h * target_aspect
 
-    # Add proportional padding
-    pad = int(max(uw, uh) * padding_pct)
-    px0 = ux0 - pad
-    py0 = uy0 - pad
-    px1 = ux1 + pad
-    py1 = uy1 + pad
+    # Center crop on the car
+    px0 = int(car_cx - frame_w / 2)
+    py0 = int(car_cy - frame_h / 2)
+    px1 = int(car_cx + frame_w / 2)
+    py1 = int(car_cy + frame_h / 2)
 
-    pw = px1 - px0
-    ph = py1 - py0
-
-    # Adjust to target aspect ratio (expand the smaller dimension)
-    target_aspect = target_size[0] / target_size[1]  # width / height
-    current_aspect = pw / ph
-
-    cx = (px0 + px1) / 2
-    cy = (py0 + py1) / 2
-
-    if current_aspect > target_aspect:
-        # Too wide — expand height
-        new_h = pw / target_aspect
-        py0 = int(cy - new_h / 2)
-        py1 = int(cy + new_h / 2)
-    else:
-        # Too tall — expand width
-        new_w = ph * target_aspect
-        px0 = int(cx - new_w / 2)
-        px1 = int(cx + new_w / 2)
-
-    # Ensure crop starts below UI content (battery bar, etc.) but
-    # preserve enough padding above the car for states that extend
-    # higher (trunk-open). Any residual UI text in the padding gets
-    # cleaned by remove_sideview_ui.
-    # Allow the crop to start at most halfway between py0 and uy0 —
-    # this keeps at least half the padding above the car intact.
-    min_padded_y0 = (py0 + uy0) // 2
-    effective_min_y0 = min(min_y0, min_padded_y0)
-    if py0 < effective_min_y0:
-        shift = effective_min_y0 - py0
+    # Shift crop if it starts above min_y0 (battery bar)
+    if min_y0 > 0 and py0 < min_y0:
+        shift = min_y0 - py0
         py0 += shift
         py1 += shift
 
-    # Clamp to image bounds
+    # Clamp to image bounds (shift rather than clip to preserve aspect)
+    if px0 < 0:
+        px1 -= px0; px0 = 0
+    if py0 < 0:
+        py1 -= py0; py0 = 0
+    if px1 > iw:
+        px0 -= (px1 - iw); px1 = iw
+    if py1 > ih:
+        py0 -= (py1 - ih); py1 = ih
+
     px0 = max(0, px0)
     py0 = max(0, py0)
     px1 = min(iw, px1)
     py1 = min(ih, py1)
 
     return (px0, py0, px1, py1)
+
+
+def align_to_reference(new_img, ref_img, verbose=False):
+    """Align a processed image to a reference using phase correlation.
+
+    Ensures consistent car positioning across different submissions
+    of the same model/variant.
+
+    Returns the shifted PIL Image, or the original if alignment fails.
+    """
+    new_arr = np.array(new_img.convert("RGB"))
+    ref_arr = np.array(ref_img.convert("RGB"))
+    nh, nw = new_arr.shape[:2]
+    rh, rw = ref_arr.shape[:2]
+
+    if (nh, nw) != (rh, rw):
+        new_resized = cv2.resize(new_arr, (rw, rh), interpolation=cv2.INTER_LINEAR)
+    else:
+        new_resized = new_arr
+
+    new_gray = cv2.cvtColor(new_resized, cv2.COLOR_RGB2GRAY).astype(np.float64)
+    ref_gray = cv2.cvtColor(ref_arr, cv2.COLOR_RGB2GRAY).astype(np.float64)
+    hann = cv2.createHanningWindow((rw, rh), cv2.CV_64F)
+
+    try:
+        (dx, dy), response = cv2.phaseCorrelate(ref_gray, new_gray, hann)
+    except cv2.error:
+        if verbose:
+            print("    Reference alignment: phase correlation failed")
+        return new_img
+
+    if abs(dx) > rw * 0.05 or abs(dy) > rh * 0.05:
+        if verbose:
+            print(f"    Reference alignment: shift ({dx:.2f}, {dy:.2f}) exceeds cap")
+        return new_img
+
+    if abs(dx) < 0.3 and abs(dy) < 0.3:
+        if verbose:
+            print(f"    Reference alignment: shift ({dx:.2f}, {dy:.2f}) negligible")
+        return new_img
+
+    if verbose:
+        print(f"    Reference alignment: dx={dx:.2f}, dy={dy:.2f}")
+
+    scale_x = nw / rw
+    scale_y = nh / rh
+    M = np.float32([[1, 0, -dx * scale_x], [0, 1, -dy * scale_y]])
+    src = np.array(new_img)
+
+    if src.ndim == 3 and src.shape[2] == 4:
+        aligned = np.stack([
+            cv2.warpAffine(src[:, :, c], M, (nw, nh),
+                           borderMode=cv2.BORDER_REPLICATE)
+            for c in range(4)
+        ], axis=2)
+    else:
+        aligned = cv2.warpAffine(src, M, (nw, nh),
+                                 borderMode=cv2.BORDER_REPLICATE)
+
+    return Image.fromarray(aligned)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -789,8 +855,8 @@ def inpaint_controls_ui(car_img, car_mask, car_x0, car_y0, car_w, car_h):
         cw = cc_stats[i, cv2.CC_STAT_WIDTH]
         ch = cc_stats[i, cv2.CC_STAT_HEIGHT]
         aspect = max(cw, ch) / (min(cw, ch) + 1)
-        # Skip headlights
-        if area > size_thresh and cy_rel < 0.20 and (cx_rel < 0.35 or cx_rel > 0.65):
+        # Skip headlight zones (bright chrome/glass reflections, not UI text)
+        if cy_rel < 0.20 and (cx_rel < 0.35 or cx_rel > 0.65):
             continue
         # Skip side chrome/trim
         if area > size_thresh * 2 and (cx_rel < 0.10 or cx_rel > 0.90) and aspect > 4:
@@ -816,8 +882,9 @@ def inpaint_controls_ui(car_img, car_mask, car_x0, car_y0, car_w, car_h):
             continue
         cx_rel = (cc_cents2[i][0] - car_x0) / car_w
         cy_rel = (cc_cents2[i][1] - car_y0) / car_h
-        # Skip headlight zones
-        if area > size_thresh and cy_rel < 0.20 and (cx_rel < 0.35 or cx_rel > 0.65):
+        # Skip headlight zones (any size — small achromatic CCs in headlight
+        # area are reflections/chrome, not UI icons)
+        if cy_rel < 0.20 and (cx_rel < 0.35 or cx_rel > 0.65):
             continue
         icon_final[cc_labels2 == i] = 255
 
@@ -1002,11 +1069,12 @@ def process_controls_panel(img_path, target_size=CONTROLS_SIZE, verbose=False,
     bg_uint8 = np.clip(bg_color, 0, 255).astype(np.uint8)
     car_mask = get_car_mask_filled(img_bgr, bg_uint8, threshold=12)
 
-    # Derive car bounds from the actual car mask.
-    # This correctly excludes UI text/icons (status bar, title, bottom buttons)
-    # that find_car_bounds_panel would include — critical for non-English UIs
-    # where longer text labels inflate the bounding box.
-    mask_ys, mask_xs = np.where(car_mask > 0)
+    # Derive car bounds from the actual car mask, excluding the top 5% of
+    # the image where status bar elements can merge with the car region.
+    status_bar_cutoff = int(ih * 0.05)
+    bounds_mask = car_mask.copy()
+    bounds_mask[:status_bar_cutoff, :] = 0
+    mask_ys, mask_xs = np.where(bounds_mask > 0)
     if len(mask_ys) == 0:
         info["warnings"].append("Controls car detection failed")
         return None, info
@@ -1017,9 +1085,11 @@ def process_controls_panel(img_path, target_size=CONTROLS_SIZE, verbose=False,
 
     if verbose:
         print(f"    Car bounds: ({cx0},{cy0})-({cx1},{cy1}) "
-              f"= {cx1-cx0}x{cy1-cy0}")
+              f"= {cx1-cx0}x{cy1-cy0}"
+              f"  (status bar cutoff: y<{status_bar_cutoff})")
 
     # Inpaint UI overlays (targeted: preserves interior glass detail)
+    # Use the full car_mask (including status bar) for inpainting coverage
     car_w = cx1 - cx0
     car_h = cy1 - cy0
     inpainted = inpaint_controls_ui(img_bgr, car_mask, cx0, cy0, car_w, car_h)
@@ -1195,11 +1265,14 @@ def process_climate_panel(img_path, target_size=CLIMATE_SIZE, verbose=False,
     # Get filled car mask (fills holes in glass/interior areas)
     car_mask = get_car_mask_filled(img_bgr, bg_uint8, threshold=12)
 
-    # Derive car bounds from the actual car mask.
-    # This correctly excludes UI text/icons (status bar, temperature display,
-    # HVAC controls) that find_car_bounds_panel would include — critical for
-    # non-English UIs where longer text labels inflate the bounding box.
-    mask_ys, mask_xs = np.where(car_mask > 0)
+    # Derive car bounds from the actual car mask, excluding the top 5% of
+    # the image where status bar elements can merge with the car region.
+    # This prevents status bar pixels from inflating the car bounds, which
+    # would cause inconsistent crop framing across different submissions.
+    status_bar_cutoff = int(ih * 0.05)
+    bounds_mask = car_mask.copy()
+    bounds_mask[:status_bar_cutoff, :] = 0
+    mask_ys, mask_xs = np.where(bounds_mask > 0)
     if len(mask_ys) == 0:
         info["warnings"].append("Climate car detection failed")
         return None, info
@@ -1212,9 +1285,11 @@ def process_climate_panel(img_path, target_size=CLIMATE_SIZE, verbose=False,
 
     if verbose:
         print(f"    Car bounds: ({cx0},{cy0})-({cx1},{cy1}) "
-              f"= {car_w}x{car_h}")
+              f"= {car_w}x{car_h}"
+              f"  (status bar cutoff: y<{status_bar_cutoff})")
 
     # Inpaint UI overlays (seat heater icons, status bar, back button)
+    # Use the full car_mask (including status bar) for inpainting coverage
     inpainted = inpaint_climate_ui(img_bgr, car_mask, cx0, cy0, cx1, cy1)
 
     # Crop: start 3% into car height to cleanly remove back button area.
@@ -1575,8 +1650,10 @@ def process_all(input_dir, output_dir, reference_dir=None, manifest_path=None,
         # Constrain crop to start below battery bar + safety margin
         min_y0 = max_battery_bottom + int(first_img_shape[0] * 0.005) if max_battery_bottom > 0 else 0
 
+        closed_bounds = all_bounds.get("base")
         crop_frame = compute_crop_frame_from_union(
-            union_bounds, first_img_shape, min_y0=min_y0)
+            union_bounds, first_img_shape, min_y0=min_y0,
+            closed_bounds=closed_bounds)
 
         if verbose:
             uw = union_x1 - union_x0
@@ -2162,8 +2239,12 @@ def split_combined_doors(combined_img, base_img, mode="offcharge",
 
 
 def generate_overlays(processed_dir, output_dir, mode="offcharge",
-                      verbose=False):
+                      verbose=False, reference_dir=None):
     """Export transparent overlay PNGs for runtime compositing.
+
+    When reference_dir is provided, all outputs are phase-correlated against
+    the reference base image and shifted to match, ensuring pixel-perfect
+    alignment across different submissions of the same model.
 
     Instead of pre-rendering every state combination (128 offcharge / 32
     oncharge), this saves individual overlay diffs that the card stacks
@@ -2199,6 +2280,49 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
 
     base_img = Image.open(str(base_path)).convert("RGBA")
 
+    # Reference-based alignment: compute shift from reference base,
+    # then apply to ALL images so overlays stay pixel-aligned.
+    _ref_shift = None
+    if reference_dir:
+        ref_base = Path(reference_dir) / f"{prefix}base.png"
+        if ref_base.exists():
+            ref_img = Image.open(str(ref_base)).convert("RGBA")
+            new_arr = np.array(base_img.convert("RGB"))
+            ref_arr = np.array(ref_img.convert("RGB"))
+            rh, rw = ref_arr.shape[:2]
+            nh, nw = new_arr.shape[:2]
+            new_resized = cv2.resize(new_arr, (rw, rh)) if (nh, nw) != (rh, rw) else new_arr
+            new_gray = cv2.cvtColor(new_resized, cv2.COLOR_RGB2GRAY).astype(np.float64)
+            ref_gray = cv2.cvtColor(ref_arr, cv2.COLOR_RGB2GRAY).astype(np.float64)
+            hann = cv2.createHanningWindow((rw, rh), cv2.CV_64F)
+            try:
+                (dx, dy), _ = cv2.phaseCorrelate(ref_gray, new_gray, hann)
+                if abs(dx) < rw * 0.05 and abs(dy) < rh * 0.05:
+                    if abs(dx) > 0.3 or abs(dy) > 0.3:
+                        _ref_shift = (dx, dy)
+                        if verbose:
+                            print(f"  Reference alignment: dx={dx:.2f}, dy={dy:.2f}")
+            except cv2.error:
+                pass
+
+    def _apply_ref_shift(img):
+        if _ref_shift is None:
+            return img
+        dx, dy = _ref_shift
+        arr = np.array(img)
+        h, w = arr.shape[:2]
+        M = np.float32([[1, 0, -dx], [0, 1, -dy]])
+        if arr.ndim == 3 and arr.shape[2] == 4:
+            aligned = np.stack([
+                cv2.warpAffine(arr[:, :, c], M, (w, h),
+                               borderMode=cv2.BORDER_REPLICATE)
+                for c in range(4)
+            ], axis=2)
+        else:
+            aligned = cv2.warpAffine(arr, M, (w, h),
+                                     borderMode=cv2.BORDER_REPLICATE)
+        return Image.fromarray(aligned)
+
     # For oncharge, clean stray green cable pixels from base images.
     # The cable body is in the lower half; any green in the top rows is stray.
     def _clean_stray_green(img, top_rows=5):
@@ -2216,6 +2340,9 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
     if mode == "oncharge":
         base_img = _clean_stray_green(base_img)
 
+    # Apply reference shift to base before saving and computing diffs
+    base_img = _apply_ref_shift(base_img)
+
     # Copy base image as-is (opaque)
     base_out = f"{prefix}base.png"
     base_img.save(str(output_dir / base_out), "PNG")
@@ -2230,6 +2357,7 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
         trunk_img_raw = Image.open(str(trunk_path)).convert("RGBA")
         if mode == "oncharge":
             trunk_img_raw = _clean_stray_green(trunk_img_raw)
+        trunk_img_raw = _apply_ref_shift(trunk_img_raw)
         # Keep full trunk-open for backward compat / combo state generation
         trunk_img_raw.save(str(output_dir / trunk_out), "PNG")
         # Generate transparent trunk overlay via same diff pipeline as doors
@@ -2265,7 +2393,7 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
             if verbose:
                 print(f"  Skipping {name}: {img_path} not found")
             continue
-        state_img = Image.open(str(img_path)).convert("RGBA")
+        state_img = _apply_ref_shift(Image.open(str(img_path)).convert("RGBA"))
         overlay = _compute_overlay(state_img, base_img,
                                    remove_cable=(mode == "oncharge"))
         out_name = f"{prefix}{name}-overlay.png"
@@ -2286,7 +2414,7 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
         cpath = processed_dir / f"{cname}.png"
         if not cpath.exists():
             continue
-        cimg = Image.open(str(cpath)).convert("RGBA")
+        cimg = _apply_ref_shift(Image.open(str(cpath)).convert("RGBA"))
         overlay = _compute_overlay(cimg, base_img,
                                    remove_cable=(mode == "oncharge"))
         out_name = f"{prefix}{cname}-overlay.png"
@@ -2309,7 +2437,13 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
             panel_out = f"{panel}.png"
         # Panel backgrounds go to the PARENT of the overlays dir (colour root)
         panel_dst = output_dir.parent / panel_out
-        Image.open(str(panel_path)).convert("RGBA").save(str(panel_dst), "PNG")
+        panel_img = Image.open(str(panel_path)).convert("RGBA")
+        if reference_dir:
+            ref_panel = Path(reference_dir).parent / panel_out
+            if ref_panel.exists():
+                panel_img = align_to_reference(panel_img, Image.open(str(ref_panel)),
+                                               verbose=verbose)
+        panel_img.save(str(panel_dst), "PNG")
         print(f"  Saved {panel_out}")
 
     print(f"  Generated {count} overlays in {output_dir}")
@@ -2543,9 +2677,15 @@ def main():
     if args.generate_overlays:
         overlays_dir = Path(args.output_dir) / "overlays"
         print(f"\nGenerating transparent overlays...")
+        ref_overlays = None
+        if args.reference_dir:
+            ref_overlays = Path(args.reference_dir) / "overlays"
+            if not ref_overlays.exists():
+                ref_overlays = None
         generate_overlays(
             args.output_dir, overlays_dir,
-            mode=args.mode, verbose=args.verbose)
+            mode=args.mode, verbose=args.verbose,
+            reference_dir=str(ref_overlays) if ref_overlays else None)
 
     sys.exit(0 if report.get("success") else 1)
 

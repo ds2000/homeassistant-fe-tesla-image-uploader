@@ -236,6 +236,11 @@ class TestbedHandler(BaseHTTPRequestHandler):
             self._serve_submission_file(path, ref=ref)
             return
 
+        if path.startswith("/git/"):
+            ref = query.get("ref", [None])[0]
+            self._serve_git_file(path[len("/git/"):], ref)
+            return
+
         # Serve static files from docs/
         self._serve_static(path)
 
@@ -400,20 +405,26 @@ class TestbedHandler(BaseHTTPRequestHandler):
         # Load models.json for parsing and labels
         models_data = _load_models_json()
 
-        branches = []
+        # Deduplicate by model/variant/colour — prefer branches with processed files
+        best = {}  # key = "model/variant/colour" → branch entry
         for name in sorted(entries.keys()):
             source = entries[name]
 
-            # Parse submissions/{model}-{variant}-{colour}[-{token}]
             suffix = name[len("submissions/"):]
             parsed = _parse_submission_name(suffix, models_data)
             if not parsed:
                 continue
 
             model, variant, colour = parsed
+            combo_key = f"{model}/{variant}/{colour}"
 
-            # Build human-readable label from models.json
-            label = suffix  # fallback
+            # Check if this branch has processed files
+            ref = source if source != "local" else name
+            has_processed = _git_read_file(ref, "processed/offcharge/overlays/base.png") is not None
+            if not has_processed and not ref.startswith("origin/"):
+                has_processed = _git_read_file("origin/" + ref, "processed/offcharge/overlays/base.png") is not None
+
+            label = suffix
             if models_data:
                 m = next((x for x in models_data["models"] if x["id"] == model), None)
                 v = next((x for x in m["variants"] if x["id"] == variant), None) if m else None
@@ -421,15 +432,28 @@ class TestbedHandler(BaseHTTPRequestHandler):
                 if m and v and c:
                     label = f"{m['name']} {v['label']} \u2014 {c['name']}"
 
-            branches.append({
+            entry = {
                 "name": name,
                 "model": model,
                 "variant": variant,
                 "colour": colour,
                 "label": label,
                 "source": source,
-            })
+                "has_processed": has_processed,
+            }
 
+            is_local = not source.startswith("origin/")
+
+            prev = best.get(combo_key)
+            if prev is None:
+                best[combo_key] = entry
+            elif has_processed and not prev["has_processed"]:
+                best[combo_key] = entry
+            elif has_processed and prev["has_processed"] and is_local and prev["source"].startswith("origin/"):
+                best[combo_key] = entry  # prefer local over remote
+
+        branches = list(best.values())
+        branches.sort(key=lambda b: b["label"])
         self._json_response({"branches": branches})
 
     # ── API: dev-files (auto-populate from local directory) ───────────────
@@ -515,6 +539,47 @@ class TestbedHandler(BaseHTTPRequestHandler):
                 return
             data = file_path.read_bytes()
 
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        self.wfile.write(data)
+
+    # ── Git file serving (for review.html local mode) ──────────────────
+
+    def _serve_git_file(self, rel_path, ref):
+        """Serve any file from a git ref. Used by review.html in local mode."""
+        if not ref:
+            self._json_error(400, "Missing ?ref= parameter")
+            return
+        if ".." in rel_path or ".." in ref:
+            self._json_error(403, "Forbidden")
+            return
+        # Only allow submissions/* refs
+        if not _is_valid_submission_ref(ref):
+            self._json_error(403, "Forbidden: invalid ref")
+            return
+
+        # Try working tree first if ref matches current branch
+        current = _git_current_branch()
+        data = None
+        if current and ref == current:
+            local_path = (REPO_ROOT / rel_path).resolve()
+            if str(local_path).startswith(str(REPO_ROOT.resolve())) and local_path.is_file():
+                data = local_path.read_bytes()
+
+        # Fall back to git ref, then remote-tracking branch
+        if data is None:
+            data = _git_read_file(ref, rel_path)
+        if data is None and not ref.startswith("origin/"):
+            data = _git_read_file("origin/" + ref, rel_path)
+        if data is None:
+            self._json_error(404, f"Not found: {rel_path} in {ref}")
+            return
+
+        suffix = Path(rel_path).suffix.lower()
+        content_type = MIME_TYPES.get(suffix, "application/octet-stream")
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(data)))

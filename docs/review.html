@@ -102,6 +102,20 @@
     }
     .charging-glow { animation: chargePulse 2s ease-in-out infinite; }
     .mode-btn.active-green { border-color: #22c55e; background: rgba(34,197,94,0.15); color: #22c55e; }
+
+    /* Branch switcher */
+    .branch-row { display: flex; gap: 8px; margin-bottom: 16px; align-items: center; }
+    .branch-select {
+      padding: 7px 12px; border-radius: 6px;
+      border: 2px solid rgba(255,255,255,0.15);
+      background: #1a1a1a; color: #fff;
+      font-size: 13px; font-weight: 600;
+      font-family: inherit; cursor: pointer;
+      min-width: 280px; max-width: 420px;
+    }
+    .branch-select:focus { border-color: #e82127; outline: none; }
+    .branch-select option { background: #1a1a1a; color: #fff; }
+    .branch-select optgroup { color: rgba(255,255,255,0.5); font-style: normal; }
   </style>
 </head>
 <body>
@@ -112,14 +126,16 @@
   var REPO = 'ds2000/homeassistant-fe-tesla-image-uploader';
   var params = new URLSearchParams(window.location.search);
   var branch = params.get('branch');
+  var isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
 
   var app = document.getElementById('app');
 
-  if (!branch) {
+  if (!branch && !isLocal) {
     app.innerHTML = '<div class="error-msg">Missing <code>?branch=</code> parameter.<br><br>Example: <code>review.html?branch=submissions/3-3.1-red_multi_coat-a3f9</code></div>';
   }
 
   function rawUrl(path) {
+    if (isLocal) return '/git/' + path + '?ref=' + encodeURIComponent(branch);
     return 'https://raw.githubusercontent.com/' + REPO + '/' + branch + '/' + path;
   }
 
@@ -204,7 +220,7 @@
       var img = new Image();
       img.onload = function () { resolve({ ok: true, w: img.naturalWidth, h: img.naturalHeight }); };
       img.onerror = function () { resolve({ ok: false, w: 0, h: 0 }); };
-      img.src = url + '?t=' + Date.now();
+      img.src = url + (url.indexOf('?') >= 0 ? '&' : '?') + 't=' + Date.now();
     });
   }
 
@@ -214,6 +230,7 @@
     app.innerHTML =
       '<h1 id="title">Submission Review</h1>' +
       '<div class="subtitle" id="subtitle"></div>' +
+      (isLocal ? '<div class="branch-row" id="branch-row"><select class="branch-select" id="branch-select" disabled><option>Loading branches...</option></select></div>' : '') +
       '<div class="mode-row">' +
         '<button id="btn-offcharge" class="mode-btn active">Offcharge</button>' +
         '<button id="btn-oncharge" class="mode-btn">On-charge</button>' +
@@ -234,7 +251,9 @@
         '</div>' +
       '</div>';
 
-    document.getElementById('subtitle').textContent = 'Branch: ' + branch;
+    document.getElementById('subtitle').textContent = 'Branch: ' + (branch || '(select below)');
+
+    if (isLocal) loadBranches();
 
     document.getElementById('btn-offcharge').addEventListener('click', function () { switchMode(false); });
     document.getElementById('btn-oncharge').addEventListener('click', function () { switchMode(true); });
@@ -245,8 +264,12 @@
     });
 
     buildToggles();
-    updatePreview();
-    runTests();
+    // Only load data if branch is already set (URL param or non-local)
+    // On localhost, loadBranches() will auto-select and trigger these
+    if (branch) {
+      updatePreview();
+      runTests();
+    }
   }
 
   function switchMode(charging) {
@@ -432,8 +455,59 @@
     section.innerHTML = html;
   }
 
+  function loadBranches() {
+    fetch('/api/branches').then(function (r) { return r.json(); }).then(function (data) {
+      var sel = document.getElementById('branch-select');
+      if (!sel || !data.branches || !data.branches.length) {
+        if (sel) { sel.innerHTML = '<option>No submission branches found</option>'; }
+        return;
+      }
+
+      // Group branches by model name
+      var groups = {};
+      data.branches.forEach(function (b) {
+        var modelLabel = b.label.split(' \u2014 ')[0] || b.model;
+        if (!groups[modelLabel]) groups[modelLabel] = [];
+        groups[modelLabel].push(b);
+      });
+
+      sel.innerHTML = '<option value="" disabled>Select a submission...</option>';
+      Object.keys(groups).sort().forEach(function (groupName) {
+        var optgroup = document.createElement('optgroup');
+        optgroup.label = groupName;
+        groups[groupName].forEach(function (b) {
+          var opt = document.createElement('option');
+          opt.value = b.name;
+          opt.textContent = b.label;
+          if (branch === b.name) opt.selected = true;
+          optgroup.appendChild(opt);
+        });
+        sel.appendChild(optgroup);
+      });
+      sel.disabled = false;
+
+      sel.addEventListener('change', function () {
+        branch = sel.value;
+        document.getElementById('subtitle').textContent = 'Branch: ' + branch;
+        chargingMode = false;
+        resetActive();
+        buildToggles();
+        runTests();
+        updatePreview();
+        document.getElementById('btn-offcharge').classList.add('active');
+        document.getElementById('btn-oncharge').classList.remove('active');
+      });
+
+      // Auto-select first branch if none set
+      if (!branch && data.branches.length) {
+        sel.selectedIndex = 1; // skip the disabled placeholder
+        sel.dispatchEvent(new Event('change'));
+      }
+    });
+  }
+
   // Init after all definitions are ready
-  if (branch) init();
+  if (branch || isLocal) init();
 </script>
 
 </body>
