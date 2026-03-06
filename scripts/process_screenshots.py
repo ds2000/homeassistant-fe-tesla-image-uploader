@@ -1279,6 +1279,42 @@ def process_climate_panel(img_path, target_size=CLIMATE_SIZE, verbose=False,
 
     cx0, cy0 = int(mask_xs.min()), int(mask_ys.min())
     cx1, cy1 = int(mask_xs.max()), int(mask_ys.max())
+
+    # On some models (e.g. Model Y) the climate view's car body extends
+    # very close to the UI controls below, causing flood-fill to merge
+    # them into one connected component.  Detect this by looking at the
+    # raw (pre-flood-fill) non-bg row coverage for a sharp jump from
+    # low coverage (tapered rear bumper, <0.5) to full-width coverage
+    # (>0.9), which signals the start of a UI panel below the car.
+    raw_car_h = cy1 - cy0
+    if raw_car_h > ih * 0.85:
+        bg_bgr_f = bg_uint8[::-1].astype(np.float64)
+        raw_diff = np.sqrt(np.sum(
+            (img_bgr.astype(np.float64) - bg_bgr_f.reshape(1, 1, 3)) ** 2,
+            axis=2))
+        raw_non_bg = (raw_diff > 12).astype(np.uint8)
+        row_cov = np.sum(raw_non_bg, axis=1) / iw
+
+        # Scan bottom half for a coverage jump: a row below 0.5 followed
+        # within a few rows by coverage above 0.9 (full-width UI element).
+        scan_start = ih // 2
+        car_bottom = cy1  # fallback
+        for y in range(scan_start, ih - 5):
+            if row_cov[y] < 0.5:
+                # Check if any of the next few rows jump to near-full
+                for y2 in range(y + 1, min(y + 15, ih)):
+                    if row_cov[y2] > 0.9:
+                        car_bottom = y
+                        break
+                if car_bottom < cy1:
+                    break
+
+        if car_bottom < cy1:
+            cy1 = car_bottom
+            if verbose:
+                print(f"    Climate car bottom corrected to y={cy1} "
+                      f"(UI panel below excluded)")
+
     info["car_bounds"] = [cx0, cy0, cx1, cy1]
     car_h = cy1 - cy0
     car_w = cx1 - cx0
