@@ -79,6 +79,17 @@
     }
     .overlay-thumb .label { padding: 3px 6px; font-size: 9px; color: rgba(255,255,255,0.5); }
 
+    /* Panel overhead views */
+    .panels-section { margin-top: 24px; }
+    .panels-section h2 { font-size: 14px; color: rgba(255,255,255,0.5); margin-bottom: 10px; font-weight: 600; }
+    .panels-row { display: flex; gap: 12px; flex-wrap: wrap; }
+    .panel-card {
+      background: #1a1a1a; border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px; overflow: hidden; width: 180px;
+    }
+    .panel-card img { width: 100%; display: block; }
+    .panel-card .label { padding: 4px 8px; font-size: 10px; color: rgba(255,255,255,0.5); }
+
     .error-msg {
       background: rgba(232,33,39,0.1); border: 1px solid rgba(232,33,39,0.3);
       border-radius: 8px; padding: 20px; color: #e82127; max-width: 500px;
@@ -139,7 +150,11 @@
       ],
       zOrder: ['chargeport', 'frunk', 'fr', 'ff', 'nr', 'nf'],
       combined: { 'nf+nr': 'nf-nr-combined-overlay.png', 'ff+fr': 'ff-fr-combined-overlay.png' },
-      prefix: ''
+      prefix: '',
+      panels: [
+        { name: 'controls-bg.png', dir: 'processed/offcharge', label: 'Controls' },
+        { name: 'climate-bg.png', dir: 'processed/offcharge', label: 'Climate' }
+      ]
     },
     oncharge: {
       dir: 'processed/oncharge/overlays',
@@ -164,7 +179,11 @@
       belowTrunk: ['fr'],
       zOrder: ['frunk', 'nf', 'nr'],
       combined: { 'nf+nr': 'oncharge-nf-nr-combined-overlay.png' },
-      prefix: 'oncharge-'
+      prefix: 'oncharge-',
+      panels: [
+        { name: 'controls-bg-charging.png', dir: 'processed/oncharge', label: 'Controls (Charging)' },
+        { name: 'climate-bg-charging.png', dir: 'processed/oncharge', label: 'Climate (Charging)' }
+      ]
     }
   };
 
@@ -207,6 +226,7 @@
           '<div class="preview" id="preview"></div>' +
           '<div class="preview-info" id="preview-info"></div>' +
           '<div class="overlay-grid" id="overlay-grid"></div>' +
+          '<div class="panels-section" id="panels-section"></div>' +
         '</div>' +
         '<div class="col-files">' +
           '<table><thead><tr><th>File</th><th>Status</th><th>Size</th></tr></thead>' +
@@ -377,6 +397,7 @@
             (failed ? ' \u00b7 <span class="fail">' + failed + ' MISSING</span>' : '') +
             ' \u00b7 <span class="muted">' + total + ' total' + modeLabel + '</span>';
           buildOverlayGrid();
+          buildPanels();
           updatePreview();
         }
       });
@@ -395,6 +416,20 @@
       thumb.innerHTML = '<img src="' + rawUrl(m.dir + '/' + f.name) + '" loading="lazy" /><div class="label">' + f.name + '</div>';
       grid.appendChild(thumb);
     });
+  }
+
+  function buildPanels() {
+    var m = mode();
+    var section = document.getElementById('panels-section');
+    if (!m.panels || !m.panels.length) { section.innerHTML = ''; return; }
+    var html = '<h2>Overhead Views</h2><div class="panels-row">';
+    m.panels.forEach(function (p) {
+      html += '<div class="panel-card">' +
+        '<img src="' + rawUrl(p.dir + '/' + p.name) + '" loading="lazy" />' +
+        '<div class="label">' + p.label + '</div></div>';
+    });
+    html += '</div>';
+    section.innerHTML = html;
   }
 
   // Init after all definitions are ready

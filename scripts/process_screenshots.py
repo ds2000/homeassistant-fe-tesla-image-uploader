@@ -714,7 +714,7 @@ def get_car_mask_filled(img_bgr, bg_color, threshold=12):
     return car_mask
 
 
-def inpaint_controls_ui(car_img, car_mask, car_w, car_h):
+def inpaint_controls_ui(car_img, car_mask, car_x0, car_y0, car_w, car_h):
     """Detect and inpaint UI overlays on a controls panel image.
 
     Targeted approach that preserves interior detail visible through glass:
@@ -731,13 +731,13 @@ def inpaint_controls_ui(car_img, car_mask, car_w, car_h):
     ch_range = max_ch.astype(int) - min_ch.astype(int)
     local_mean = cv2.blur(gray.astype(np.float64), (121, 121))
 
-    # Layer 1: Very bright achromatic elements on darker surfaces (catches "Open"/"Apri" text)
+    # Layer 1: Very bright achromatic elements on dark surfaces (catches "Open" text)
     # Threshold 100 preserves interior detail (gray 30-80) while catching text (gray 110+)
     # ch_range < 60 excludes colored elements like the green charging cable
-    # dark_zone threshold 80 handles brighter car colors (blue, silver) where the
-    # hood area has local_mean ~60-75 — a threshold of 55 would miss overlay text
-    # on these colors while the text is clearly UI (achromatic white on colored body)
-    dark_zone = local_mean < 80
+    # On brighter car colors (blue, silver), the hood text is handled by Layer 2
+    # (white_on_body, min_ch > 140) instead — keeping this at 55 avoids catching
+    # headlight glass which has local_mean ~60-75
+    dark_zone = local_mean < 55
     bright_text = ((gray.astype(np.float64) > 100) & dark_zone & (ch_range < 60)).astype(np.uint8) * 255
 
     # Layer 2: White overlay on body panels (catches "Open" on hood)
@@ -784,8 +784,8 @@ def inpaint_controls_ui(car_img, car_mask, car_w, car_h):
         area = cc_stats[i, cv2.CC_STAT_AREA]
         if area < 15:
             continue
-        cx_rel = cc_cents[i][0] / car_w
-        cy_rel = cc_cents[i][1] / car_h
+        cx_rel = (cc_cents[i][0] - car_x0) / car_w
+        cy_rel = (cc_cents[i][1] - car_y0) / car_h
         cw = cc_stats[i, cv2.CC_STAT_WIDTH]
         ch = cc_stats[i, cv2.CC_STAT_HEIGHT]
         aspect = max(cw, ch) / (min(cw, ch) + 1)
@@ -814,8 +814,8 @@ def inpaint_controls_ui(car_img, car_mask, car_w, car_h):
         # Skip large achromatic blobs — these are interior features, not icons
         if area > 5000:
             continue
-        cx_rel = cc_cents2[i][0] / car_w
-        cy_rel = cc_cents2[i][1] / car_h
+        cx_rel = (cc_cents2[i][0] - car_x0) / car_w
+        cy_rel = (cc_cents2[i][1] - car_y0) / car_h
         # Skip headlight zones
         if area > size_thresh and cy_rel < 0.20 and (cx_rel < 0.35 or cx_rel > 0.65):
             continue
@@ -1022,7 +1022,7 @@ def process_controls_panel(img_path, target_size=CONTROLS_SIZE, verbose=False,
     # Inpaint UI overlays (targeted: preserves interior glass detail)
     car_w = cx1 - cx0
     car_h = cy1 - cy0
-    inpainted = inpaint_controls_ui(img_bgr, car_mask, car_w, car_h)
+    inpainted = inpaint_controls_ui(img_bgr, car_mask, cx0, cy0, car_w, car_h)
 
     # Crop to car region with padding
     padding_top = max(0, int(car_h * 0.02))
@@ -1031,13 +1031,20 @@ def process_controls_panel(img_path, target_size=CONTROLS_SIZE, verbose=False,
     crop_y1 = min(ih, cy1 + padding_bot)
     cropped_bgr = inpainted[crop_y0:crop_y1, :, :]
 
-    # Clean up non-car bright elements in the crop area (lightning bolt, nav icons)
+    # Clean non-car elements outside car mask using Euclidean distance from bg.
+    # Catches dim UI icons (lightning bolt, button bar) that a simple gray > 40
+    # threshold misses — their gray 25-40 values are close to bg (~22-24) but
+    # still visibly different.  Distance threshold 10 matches climate panel.
     crop_mask = car_mask[crop_y0:crop_y1, :]
-    gray_crop = cv2.cvtColor(cropped_bgr, cv2.COLOR_BGR2GRAY)
-    bright_non_car = (gray_crop > 40) & (crop_mask == 0)
+    bg_bgr = bg_uint8[::-1]  # RGB to BGR
+    bg_float = bg_bgr.reshape(1, 1, 3).astype(np.float64)
+    outside_diff = np.sqrt(
+        np.sum((cropped_bgr.astype(np.float64) - bg_float) ** 2, axis=2)
+    )
+    replace_outside = (outside_diff > 10) & (crop_mask == 0)
     for c in range(3):
-        cropped_bgr[:, :, c] = np.where(bright_non_car,
-                                         int(bg_uint8[2 - c]),  # BGR order
+        cropped_bgr[:, :, c] = np.where(replace_outside,
+                                         int(bg_bgr[c]),
                                          cropped_bgr[:, :, c])
 
     # Convert back to RGB PIL Image
