@@ -25,10 +25,17 @@ jobs:
       - name: Detect submission directory
         id: detect
         run: |
-          # Find the submission directory (nested: submissions/{model}/{variant}/{colour}/)
-          SUBMISSION_DIR=$(find submissions/ -mindepth 3 -maxdepth 3 -type d | head -n1)
+          # Find NEW submission directories by comparing against base branch
+          # This avoids picking up inherited submission dirs from previous merges
+          SUBMISSION_DIR=$(git diff --name-only --diff-filter=A origin/TESUPL0001...HEAD \
+            | grep '^submissions/' \
+            | head -n1 \
+            | sed 's|^\(submissions/[^/]*/[^/]*/[^/]*\)/.*|\1|' \
+            | sort -u \
+            | head -n1)
+
           if [ -z "$SUBMISSION_DIR" ]; then
-            echo "::error::No submission directory found under submissions/"
+            echo "::error::No new submission directory found (compared to base branch)"
             exit 1
           fi
           echo "submission_dir=$SUBMISSION_DIR" >> "$GITHUB_OUTPUT"
