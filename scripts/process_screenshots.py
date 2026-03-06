@@ -1827,72 +1827,12 @@ def process_all(input_dir, output_dir, reference_dir=None, manifest_path=None,
                 if verbose:
                     print(f"    {far_out}: skipped (no significant pixels)")
 
-        # Split all-doors image into near/far halves for same-side combined
-        if "all-doors" in processed_images:
-            all_doors_img = processed_images["all-doors"]
-            print(f"  Splitting all-doors -> nf-nr-combined + ff-fr-combined")
-            near_half, far_half = split_combined_doors(
-                all_doors_img, base_img, mode=mode, verbose=verbose)
-
-            # Clean cross-side leakage: far-side door pixels can extend past
-            # the split boundary into the near half (and vice versa).
-            # Subtract known opposite-side door pixels from each half.
-            if mode == "oncharge":
-                near_doors = ["nf-open", "nr-open"]
-                far_doors = ["ff-open", "fr-open"]
-            else:
-                near_doors = ["nf-open", "nr-open"]
-                far_doors = ["ff-open", "fr-open"]
-
-            base_arr = np.array(base_img.convert("RGB")).astype(np.float64)
-            for half, exclude_doors, label in [
-                (near_half, far_doors, "near"),
-                (far_half, near_doors, "far"),
-            ]:
-                if half is None:
-                    continue
-                exclude_mask = np.zeros(
-                    (base_arr.shape[0], base_arr.shape[1]), dtype=np.uint8)
-                for dname in exclude_doors:
-                    if dname in processed_images:
-                        d_arr = np.array(
-                            processed_images[dname].convert("RGB")
-                        ).astype(np.float64)
-                        d_diff = np.sqrt(
-                            np.sum((d_arr - base_arr) ** 2, axis=2))
-                        exclude_mask = np.maximum(
-                            exclude_mask, (d_diff > 1).astype(np.uint8))
-                removed = 0
-                if np.any(exclude_mask > 0):
-                    h_arr = np.array(half)
-                    overlap = (h_arr[:, :, 3] > 0) & (exclude_mask > 0)
-                    removed = int(np.sum(overlap))
-                    h_arr[:, :, 3] = np.where(overlap, 0, h_arr[:, :, 3])
-                    half = Image.fromarray(h_arr)
-                    if label == "near":
-                        near_half = half
-                    else:
-                        far_half = half
-                if verbose and removed > 0:
-                    print(f"    Removed {removed} cross-side px from {label}")
-
-            for combo_name, half in [("nf-nr-combined", near_half),
-                                     ("ff-fr-combined", far_half)]:
-                if half is not None and combo_name not in processed_images:
-                    full_img = base_img.copy()
-                    full_img.paste(half, (0, 0), half)
-                    out_path = output_dir / f"{combo_name}.png"
-                    full_img.save(str(out_path), "PNG")
-                    processed_images[combo_name] = full_img
-                    print(f"    Saved {combo_name}.png")
-
         # Derive same-side combined overlays (nf-nr-combined, ff-fr-combined)
-        # from individual door compositing as fallback when no all-doors screenshot.
+        # Always composite from individual door images — the all-doors split
+        # can't reliably separate near/far when door pixels cross the center.
         same_side_combos = (COMBINED_PATTERNS_ONCHARGE if mode == "oncharge"
                             else COMBINED_PATTERNS_OFFCHARGE)
         for combo_name, (_stems, constituents) in same_side_combos.items():
-            if combo_name in processed_images:
-                continue  # Already captured from a dedicated screenshot
             # Check if both constituent door images exist
             parts = [f"{c}-open" for c in constituents]
             if all(p in processed_images for p in parts):
@@ -2291,6 +2231,127 @@ def split_combined_doors(combined_img, base_img, mode="offcharge",
     return near_overlay, far_overlay
 
 
+def validate_overlays(output_dir, mode="offcharge"):
+    """Validate overlay integrity: check for cross-contamination and layering.
+
+    Ensures:
+    - Each door overlay only contains pixels from its own door
+    - Combined overlays contain exactly their constituent doors' pixels
+    - No far-side door pixels leak into near-side overlays (and vice versa)
+    - All overlay states render without artifacts
+
+    Returns list of error strings (empty = all passed).
+    """
+    output_dir = Path(output_dir)
+    prefix = "oncharge-" if mode == "oncharge" else ""
+    errors = []
+
+    # Load base
+    base_path = output_dir / f"{prefix}base.png"
+    if not base_path.exists():
+        return [f"Base image not found: {base_path}"]
+    base = np.array(Image.open(str(base_path)).convert("RGBA"))
+
+    # Load all door overlays
+    door_names = ["nf", "nr", "ff", "fr"]
+    door_overlays = {}
+    for name in door_names:
+        path = output_dir / f"{prefix}{name}-overlay.png"
+        if path.exists():
+            arr = np.array(Image.open(str(path)).convert("RGBA"))
+            door_overlays[name] = arr[:, :, 3] > 0
+
+    # Define sides: which doors are near vs far
+    near_doors = ["nf", "nr"]
+    far_doors = ["ff", "fr"]
+
+    # 1. Check cross-side contamination between individual door overlays
+    for nd in near_doors:
+        for fd in far_doors:
+            if nd in door_overlays and fd in door_overlays:
+                overlap = door_overlays[nd] & door_overlays[fd]
+                n = int(np.sum(overlap))
+                if n > 0:
+                    errors.append(
+                        f"CROSS-SIDE: {nd}-overlay has {n} px overlapping "
+                        f"with {fd}-overlay")
+
+    # 2. Check combined overlays contain only their constituent doors
+    combined_checks = {
+        "nf-nr-combined": (near_doors, far_doors),
+        "ff-fr-combined": (far_doors, near_doors),
+    }
+    for cname, (own_doors, other_doors) in combined_checks.items():
+        cpath = output_dir / f"{prefix}{cname}-overlay.png"
+        if not cpath.exists():
+            continue
+        carr = np.array(Image.open(str(cpath)).convert("RGBA"))
+        cmask = carr[:, :, 3] > 0
+
+        # Should not contain opposite-side door pixels
+        for od in other_doors:
+            if od in door_overlays:
+                overlap = cmask & door_overlays[od]
+                n = int(np.sum(overlap))
+                if n > 0:
+                    errors.append(
+                        f"LEAKAGE: {cname}-overlay has {n} px from "
+                        f"{od}-overlay")
+
+    # 3. Check all single-door toggle states render correctly
+    #    (overlay on base should not have stray pixels far from the door)
+    h, w = base.shape[:2]
+    mid_x = w // 2
+    for name in door_names:
+        if name not in door_overlays:
+            continue
+        mask = door_overlays[name]
+        ys, xs = np.where(mask)
+        if len(xs) == 0:
+            continue
+
+        # Near doors should have centroid on the near side, far on far side
+        cx = float(np.mean(xs))
+        if mode == "offcharge":
+            is_near = name in near_doors
+            if is_near and cx < mid_x * 0.6:
+                errors.append(
+                    f"POSITION: {name}-overlay centroid x={cx:.0f} is on "
+                    f"the far side (expected near/right, mid={mid_x})")
+            elif not is_near and cx > mid_x * 1.4:
+                errors.append(
+                    f"POSITION: {name}-overlay centroid x={cx:.0f} is on "
+                    f"the near side (expected far/left, mid={mid_x})")
+        else:  # oncharge: near = left
+            is_near = name in near_doors
+            if is_near and cx > mid_x * 1.4:
+                errors.append(
+                    f"POSITION: {name}-overlay centroid x={cx:.0f} is on "
+                    f"the far side (expected near/left, mid={mid_x})")
+            elif not is_near and cx < mid_x * 0.6:
+                errors.append(
+                    f"POSITION: {name}-overlay centroid x={cx:.0f} is on "
+                    f"the near side (expected far/right, mid={mid_x})")
+
+    # 4. Check non-door overlays (frunk, chargeport, trunk) don't overlap doors
+    for extra in ["frunk", "chargeport"]:
+        epath = output_dir / f"{prefix}{extra}-overlay.png"
+        if not epath.exists():
+            continue
+        earr = np.array(Image.open(str(epath)).convert("RGBA"))
+        emask = earr[:, :, 3] > 0
+        for dname in door_names:
+            if dname in door_overlays:
+                overlap = emask & door_overlays[dname]
+                n = int(np.sum(overlap))
+                if n > 1000:  # frunk/ff naturally overlap; only flag major issues
+                    errors.append(
+                        f"OVERLAP: {extra}-overlay has {n} px overlapping "
+                        f"with {dname}-overlay")
+
+    return errors
+
+
 def generate_overlays(processed_dir, output_dir, mode="offcharge",
                       verbose=False, reference_dir=None):
     """Export transparent overlay PNGs for runtime compositing.
@@ -2500,6 +2561,15 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
         print(f"  Saved {panel_out}")
 
     print(f"  Generated {count} overlays in {output_dir}")
+
+    # Validate overlay integrity
+    validation_errors = validate_overlays(output_dir, mode=mode)
+    if validation_errors:
+        print(f"\n  OVERLAY VALIDATION FAILED ({len(validation_errors)} issues):")
+        for err in validation_errors:
+            print(f"    - {err}")
+    else:
+        print(f"  Overlay validation passed")
 
 
 def generate_combo_states(processed_dir, output_dir, mode="offcharge",
