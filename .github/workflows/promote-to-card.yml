@@ -193,7 +193,9 @@ jobs:
           fi
 
           if grep -q "^### Added" CHANGELOG.md; then
-            sed -i "0,/^### Added$/s/^### Added$/### Added\n${ENTRY}/" CHANGELOG.md
+            # Use awk instead of sed to avoid delimiter conflicts with URLs in ENTRY
+            awk -v entry="$ENTRY" '/^### Added$/ && !done { print; print entry; done=1; next } 1' \
+              CHANGELOG.md > CHANGELOG.tmp && mv CHANGELOG.tmp CHANGELOG.md
             echo "Updated CHANGELOG"
           fi
 
