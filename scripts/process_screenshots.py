@@ -1834,6 +1834,48 @@ def process_all(input_dir, output_dir, reference_dir=None, manifest_path=None,
             near_half, far_half = split_combined_doors(
                 all_doors_img, base_img, mode=mode, verbose=verbose)
 
+            # Clean cross-side leakage: far-side door pixels can extend past
+            # the split boundary into the near half (and vice versa).
+            # Subtract known opposite-side door pixels from each half.
+            if mode == "oncharge":
+                near_doors = ["nf-open", "nr-open"]
+                far_doors = ["ff-open", "fr-open"]
+            else:
+                near_doors = ["nf-open", "nr-open"]
+                far_doors = ["ff-open", "fr-open"]
+
+            base_arr = np.array(base_img.convert("RGB")).astype(np.float64)
+            for half, exclude_doors, label in [
+                (near_half, far_doors, "near"),
+                (far_half, near_doors, "far"),
+            ]:
+                if half is None:
+                    continue
+                exclude_mask = np.zeros(
+                    (base_arr.shape[0], base_arr.shape[1]), dtype=np.uint8)
+                for dname in exclude_doors:
+                    if dname in processed_images:
+                        d_arr = np.array(
+                            processed_images[dname].convert("RGB")
+                        ).astype(np.float64)
+                        d_diff = np.sqrt(
+                            np.sum((d_arr - base_arr) ** 2, axis=2))
+                        exclude_mask = np.maximum(
+                            exclude_mask, (d_diff > 1).astype(np.uint8))
+                removed = 0
+                if np.any(exclude_mask > 0):
+                    h_arr = np.array(half)
+                    overlap = (h_arr[:, :, 3] > 0) & (exclude_mask > 0)
+                    removed = int(np.sum(overlap))
+                    h_arr[:, :, 3] = np.where(overlap, 0, h_arr[:, :, 3])
+                    half = Image.fromarray(h_arr)
+                    if label == "near":
+                        near_half = half
+                    else:
+                        far_half = half
+                if verbose and removed > 0:
+                    print(f"    Removed {removed} cross-side px from {label}")
+
             for combo_name, half in [("nf-nr-combined", near_half),
                                      ("ff-fr-combined", far_half)]:
                 if half is not None and combo_name not in processed_images:
@@ -2185,11 +2227,22 @@ def split_combined_doors(combined_img, base_img, mode="offcharge",
                   f"correcting to image center x={w // 2}")
         split_x = w // 2
 
-    # ── Create left/right masks ──────────────────────────────────────────
-    left_mask = mask.copy()
-    left_mask[:, split_x:] = 0
-    right_mask = mask.copy()
-    right_mask[:, :split_x] = 0
+    # ── Assign CCs to left/right by centroid ─────────────────────────────
+    # A strict x-coordinate split misassigns CCs that straddle the boundary
+    # (e.g. far-rear door extending past center). Instead, assign each CC
+    # to the side where its centroid falls.
+    n_cc3, labels3, stats3, centroids3 = cv2.connectedComponentsWithStats(
+        mask, 8)
+    left_mask = np.zeros_like(mask)
+    right_mask = np.zeros_like(mask)
+    for i in range(1, n_cc3):
+        if stats3[i, cv2.CC_STAT_AREA] < min_cc_area:
+            continue
+        cc_cx = centroids3[i][0]
+        if cc_cx < split_x:
+            left_mask[labels3 == i] = 255
+        else:
+            right_mask[labels3 == i] = 255
 
     # Assign near/far based on camera mode
     # Offcharge (front 3/4 from right): near = RIGHT, far = LEFT
