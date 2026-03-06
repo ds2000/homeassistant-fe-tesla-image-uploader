@@ -78,29 +78,82 @@ jobs:
           # Store report for PR body
           cat validation_report.json
 
+      - name: Fetch reference images for alignment
+        if: steps.validate.outputs.validation_passed == 'true'
+        id: reference
+        env:
+          MODEL: ${{ steps.detect.outputs.model }}
+          VARIANT: ${{ steps.detect.outputs.variant }}
+          COLOUR: ${{ steps.detect.outputs.colour }}
+        run: |
+          # Find an existing colour for this model/variant in the card repo
+          # to use as alignment reference (ensures consistent car positioning)
+          REF_COLOUR=$(curl -sL "https://raw.githubusercontent.com/ds2000/homeassistant-fe-tesla/main/models.json" \
+            | jq -r --arg m "$MODEL" --arg v "$VARIANT" --arg c "$COLOUR" \
+              '.models[] | select(.id == $m) | .variants[] | select(.id == $v) | .colours[] | select(.hasImages == true and .id != $c) | .id' \
+            | head -n1)
+
+          if [ -n "$REF_COLOUR" ]; then
+            echo "Reference colour: $REF_COLOUR"
+            REF_BASE="https://raw.githubusercontent.com/ds2000/homeassistant-fe-tesla/main/images/models/${MODEL}/${VARIANT}/${REF_COLOUR}"
+            mkdir -p reference/offcharge/overlays reference/oncharge/overlays
+
+            # Download offcharge reference files
+            for f in overlays/base.png controls-bg.png climate-bg.png; do
+              curl -sL "${REF_BASE}/${f}" -o "reference/offcharge/${f}" 2>/dev/null || true
+            done
+            # Download oncharge reference files
+            for f in overlays/oncharge-base.png controls-bg-charging.png climate-bg-charging.png; do
+              curl -sL "${REF_BASE}/${f}" -o "reference/oncharge/${f}" 2>/dev/null || true
+            done
+
+            if [ -f reference/offcharge/overlays/base.png ]; then
+              echo "has_reference=true" >> "$GITHUB_OUTPUT"
+              echo "Downloaded reference from ${REF_COLOUR}"
+            else
+              echo "has_reference=false" >> "$GITHUB_OUTPUT"
+              echo "Reference download failed — proceeding without alignment"
+            fi
+          else
+            echo "has_reference=false" >> "$GITHUB_OUTPUT"
+            echo "No existing reference colour found — first submission for this model/variant"
+          fi
+
       - name: Process screenshots (offcharge)
         if: steps.validate.outputs.validation_passed == 'true'
         env:
           SUBMISSION_DIR: ${{ steps.detect.outputs.submission_dir }}
+          HAS_REF: ${{ steps.reference.outputs.has_reference }}
         run: |
+          REF_ARGS=""
+          if [ "$HAS_REF" = "true" ]; then
+            REF_ARGS="--reference-dir reference/offcharge"
+          fi
           python scripts/process_screenshots.py \
             --input-dir "$SUBMISSION_DIR" \
             --output-dir processed/offcharge/ \
             --mode offcharge \
             --generate-overlays \
-            --verbose
+            --verbose \
+            $REF_ARGS
 
       - name: Process screenshots (oncharge)
         if: steps.validate.outputs.validation_passed == 'true'
         env:
           SUBMISSION_DIR: ${{ steps.detect.outputs.submission_dir }}
+          HAS_REF: ${{ steps.reference.outputs.has_reference }}
         run: |
+          REF_ARGS=""
+          if [ "$HAS_REF" = "true" ]; then
+            REF_ARGS="--reference-dir reference/oncharge"
+          fi
           python scripts/process_screenshots.py \
             --input-dir "$SUBMISSION_DIR" \
             --output-dir processed/oncharge/ \
             --mode oncharge \
             --generate-overlays \
-            --verbose
+            --verbose \
+            $REF_ARGS
 
       - name: Commit processed output
         if: steps.validate.outputs.validation_passed == 'true'
