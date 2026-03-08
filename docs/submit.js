@@ -219,6 +219,7 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
     var verificationToken = '';
     var uploadedFiles = {};
     var uploadCableFlags = {}; // layerKey → true/false (detected from ORIGINAL screenshot before crop)
+    var uploadClimateFlags = {}; // layerKey → true/false (climate-active wisps detected)
     var contributorInfo = null;   // {credit, type} or null
     var currentLayerIndex = 0;
     var layerDOMCache = {};
@@ -1002,6 +1003,15 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
                 uploadCableFlags[layerKey] = hasCable;
             });
 
+            // Detect climate-active wisps on side-view screenshots
+            var isSideView = OFFCHARGE_SIDE_KEYS.indexOf(layerKey) !== -1
+                          || ONCHARGE_KEYS.indexOf(layerKey) !== -1;
+            if (isSideView) {
+                detectClimateActive(file).then(function (isActive) {
+                    uploadClimateFlags[layerKey] = isActive;
+                });
+            }
+
             // Auto-crop: remove phone status bar + app UI below the car
             cropScreenshot(file, function (croppedFile) {
                 uploadedFiles[layerKey] = croppedFile;
@@ -1026,6 +1036,7 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
     function removeFileWizard(layerKey, dropzone, emptyState, thumbWrap, thumb, fileInput) {
         delete uploadedFiles[layerKey];
         delete uploadCableFlags[layerKey];
+        delete uploadClimateFlags[layerKey];
 
         if (thumb.dataset.objectUrl) {
             URL.revokeObjectURL(thumb.dataset.objectUrl);
@@ -1109,6 +1120,93 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
         });
     }
 
+    // ── Climate-active detection ─────────────────────────────────────────
+    // Simplified version of validate_submission.py check_climate_active().
+    // Finds car via Euclidean distance from bg color, isolates windscreen
+    // (upper 40% of car), measures bright achromatic pixel ratio.
+    // Clean cars score ~18-20%; climate-on scores ~26%+.
+    // Threshold 0.22 gives clear separation without morphological ops.
+    var CLIMATE_THRESHOLD = 0.22;
+
+    function detectClimateActive(file) {
+        return new Promise(function (resolve) {
+            var img = new Image();
+            img.onload = function () {
+                var w = img.naturalWidth;
+                var h = img.naturalHeight;
+                var canvas = document.createElement('canvas');
+                canvas.width = w;
+                canvas.height = h;
+                var ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                var imageData = ctx.getImageData(0, 0, w, h);
+                var data = imageData.data;
+                URL.revokeObjectURL(img.src);
+
+                // Sample background color from top-left 10x10 corner
+                var bgR = 0, bgG = 0, bgB = 0, bgN = 0;
+                for (var by = 0; by < Math.min(10, h); by++) {
+                    for (var bx = 0; bx < Math.min(10, w); bx++) {
+                        var bi = (by * w + bx) * 4;
+                        bgR += data[bi]; bgG += data[bi + 1]; bgB += data[bi + 2];
+                        bgN++;
+                    }
+                }
+                bgR /= bgN; bgG /= bgN; bgB /= bgN;
+
+                // Find car bounds via Euclidean distance from bg
+                var minX = w, maxX = 0, minY = h, maxY = 0;
+                for (var y = 0; y < h; y += 2) {
+                    for (var x = 0; x < w; x += 2) {
+                        var idx = (y * w + x) * 4;
+                        var dr = data[idx] - bgR;
+                        var dg = data[idx + 1] - bgG;
+                        var db = data[idx + 2] - bgB;
+                        if (dr * dr + dg * dg + db * db > 625) { // > 25 distance
+                            if (x < minX) minX = x;
+                            if (x > maxX) maxX = x;
+                            if (y < minY) minY = y;
+                            if (y > maxY) maxY = y;
+                        }
+                    }
+                }
+
+                var carH = maxY - minY;
+                if (carH < 50) { resolve(false); return; }
+
+                // Windscreen region: upper 40% of car bounding box
+                var wsY1 = minY + Math.round(carH * 0.4);
+
+                // Count bright achromatic vs total non-bg pixels in windscreen
+                var totalCar = 0;
+                var brightAchro = 0;
+                for (var y = minY; y < wsY1; y += 2) {
+                    for (var x = minX; x < maxX; x += 2) {
+                        var idx = (y * w + x) * 4;
+                        var r = data[idx], g = data[idx + 1], b = data[idx + 2];
+                        var dr = r - bgR, dg = g - bgG, db = b - bgB;
+                        if (dr * dr + dg * dg + db * db <= 625) continue;
+                        totalCar++;
+                        var gray = 0.299 * r + 0.587 * g + 0.114 * b;
+                        var chMax = Math.max(r, g, b);
+                        var chMin = Math.min(r, g, b);
+                        if (gray > 80 && (chMax - chMin) < 30) {
+                            brightAchro++;
+                        }
+                    }
+                }
+
+                if (totalCar < 100) { resolve(false); return; }
+                resolve(brightAchro / totalCar > CLIMATE_THRESHOLD);
+            };
+            img.onerror = function () {
+                URL.revokeObjectURL(img.src);
+                resolve(false);
+            };
+            img.src = URL.createObjectURL(file);
+        });
+    }
+
     // Side-view keys that should (oncharge) or should not (offcharge) have a cable
     var OFFCHARGE_SIDE_KEYS = ['closed', 'chargeport', 'frunk', 'trunk',
                                 'front_doors', 'rear_doors', 'all_doors'];
@@ -1133,6 +1231,14 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
                 var layer = LAYERS.filter(function (l) { return l.key === key; })[0];
                 issues.push({ key: key, label: layer ? layer.label + ' (Unplugged)' : key, issue: 'charging indicators detected — this should be an unplugged screenshot' });
             }
+        });
+
+        // Climate-active detection — hard block, cannot bypass
+        keys.forEach(function (key) {
+            if (!uploadClimateFlags[key]) return;
+            var layer = LAYERS.filter(function (l) { return l.key === key; })[0];
+            var section = layer && layer.section ? ' (' + layer.section + ')' : '';
+            issues.push({ key: key, label: (layer ? layer.label : key) + section, issue: 'climate control appears to be ON — white air flow graphics visible behind windscreen. Turn climate OFF and retake.', blocking: true });
         });
 
         // Duplicate detection via file size (quick heuristic)
@@ -1193,6 +1299,7 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
     function resetUploadState() {
         uploadedFiles = {};
         uploadCableFlags = {};
+        uploadClimateFlags = {};
         contributorInfo = null;
         layerDOMCache = {};
         currentLayerIndex = 0;
@@ -1604,6 +1711,8 @@ function ghApi(method, path, body) {
                 }
             });
 
+            var hasBlocking = issues.some(function (i) { return i.blocking; });
+
             var confirmBtn = document.createElement('button');
             confirmBtn.className = 'btn btn-secondary';
             confirmBtn.textContent = 'Submit anyway';
@@ -1614,7 +1723,9 @@ function ghApi(method, path, body) {
             });
 
             $uploadError.appendChild(fixBtn);
-            $uploadError.appendChild(confirmBtn);
+            if (!hasBlocking) {
+                $uploadError.appendChild(confirmBtn);
+            }
             $uploadError.hidden = false;
 
             $btnSubmit.disabled = false;

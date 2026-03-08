@@ -71,7 +71,11 @@ jobs:
         run: |
           python scripts/validate_submission.py \
             --submission-dir "$SUBMISSION_DIR" \
-            > validation_report.json 2>&1 || true
+            > validation_report.json 2> validation_stderr.txt || true
+          # Show climate / validation errors in CI log
+          if [ -s validation_stderr.txt ]; then
+            cat validation_stderr.txt
+          fi
 
           # Check if validation passed
           if jq -e '.all_pass' validation_report.json > /dev/null 2>&1; then
