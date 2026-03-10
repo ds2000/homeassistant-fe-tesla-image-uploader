@@ -380,6 +380,27 @@ def compute_crop_frame_from_union(union_bounds, img_shape,
     px1 = int(car_cx + frame_w / 2)
     py1 = int(car_cy + frame_h / 2)
 
+    # Ensure the union bounds fit within the crop frame.
+    # The frame is centered on the closed car, but open-trunk/door states
+    # may extend above or below — shift frame to contain the full union.
+    pad = int((min_pad_ratio - 1.0) * max(uw, uh) / 2)
+    if uy0 - pad < py0:
+        shift = py0 - (uy0 - pad)
+        py0 -= shift
+        py1 -= shift
+    if uy1 + pad > py1:
+        shift = (uy1 + pad) - py1
+        py0 += shift
+        py1 += shift
+    if ux0 - pad < px0:
+        shift = px0 - (ux0 - pad)
+        px0 -= shift
+        px1 -= shift
+    if ux1 + pad > px1:
+        shift = (ux1 + pad) - px1
+        px0 += shift
+        px1 += shift
+
     # Shift crop if it starts above min_y0 (battery bar)
     if min_y0 > 0 and py0 < min_y0:
         shift = min_y0 - py0
@@ -2555,6 +2576,22 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
             total = arr.shape[0] * arr.shape[1]
             print(f"  {out_name}: {n} opaque px "
                   f"({100*n/total:.1f}%)")
+
+    # Clean frunk overlay: cp_ft.png has frunk+trunk+chargeport all open,
+    # so frunk-overlay contains leaked trunk pixels. Subtract them out by
+    # zeroing any pixels that also appear in trunk-overlay.
+    frunk_overlay_path = output_dir / f"{prefix}frunk-overlay.png"
+    trunk_overlay_path = output_dir / f"{prefix}trunk-overlay.png"
+    if frunk_overlay_path.exists() and trunk_overlay_path.exists():
+        frunk_arr = np.array(Image.open(str(frunk_overlay_path)))
+        trunk_arr = np.array(Image.open(str(trunk_overlay_path)))
+        # Zero frunk pixels where trunk overlay is opaque
+        trunk_opaque = trunk_arr[:, :, 3] > 0
+        frunk_arr[trunk_opaque, 3] = 0
+        Image.fromarray(frunk_arr).save(str(frunk_overlay_path), "PNG")
+        n = int(np.sum(frunk_arr[:, :, 3] > 0))
+        if verbose:
+            print(f"  {prefix}frunk-overlay.png: cleaned trunk leak → {n} opaque px")
 
     # Generate combined overlays
     combined_patterns = (COMBINED_PATTERNS_ONCHARGE if mode == "oncharge"

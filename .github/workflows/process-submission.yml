@@ -284,6 +284,9 @@ jobs:
         run: |
           STATUS_KEY="${MODEL}/${VARIANT}/${COLOUR}"
 
+          # Stash any uncommitted processed files before switching branches
+          git stash --include-untracked || true
+
           # Checkout main to update status.json
           git checkout TESUPL0001
 
