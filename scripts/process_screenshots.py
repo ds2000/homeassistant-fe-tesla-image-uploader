@@ -203,7 +203,11 @@ def find_contiguous_runs(mask, gap_bridge=0):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def detect_background_color(arr):
-    """Detect background color by sampling the 4 corners of the image."""
+    """Detect background color by sampling the top corners of the image.
+
+    The Tesla app often has a two-tone background (darker at the bottom),
+    so we use only the top-left and top-right corners where the car sits.
+    """
     s = CORNER_SAMPLE_SIZE
     h, w = arr.shape[:2]
     # Use only RGB channels (images may be RGBA)
@@ -211,8 +215,6 @@ def detect_background_color(arr):
     corners = [
         rgb[:s, :s],
         rgb[:s, w - s:],
-        rgb[h - s:, :s],
-        rgb[h - s:, w - s:],
     ]
     all_pixels = np.concatenate([c.reshape(-1, 3) for c in corners], axis=0)
     return np.median(all_pixels, axis=0).astype(np.float64)
@@ -366,7 +368,7 @@ def compute_crop_frame_from_union(union_bounds, img_shape,
     # Ensure union bounds fit within frame (expand if needed)
     uw = ux1 - ux0
     uh = uy1 - uy0
-    min_pad_ratio = 1.06
+    min_pad_ratio = 1.10
     if uw * min_pad_ratio > frame_w:
         frame_w = uw * min_pad_ratio
         frame_h = frame_w / target_aspect
@@ -2272,14 +2274,26 @@ def split_combined_doors(combined_img, base_img, mode="offcharge",
         near_mask, far_mask = right_mask, left_mask
 
     # ── Build overlay images with convex-hull fill (same as _compute_overlay) ──
+    # Build side masks to clip hull fill — prevents hull from expanding
+    # past split_x into the opposite side's territory.
+    left_side = np.zeros((h, w), dtype=np.uint8)
+    left_side[:, :split_x] = 255
+    right_side = np.zeros((h, w), dtype=np.uint8)
+    right_side[:, split_x:] = 255
+    if mode == "oncharge":
+        near_side_clip, far_side_clip = left_side, right_side
+    else:
+        near_side_clip, far_side_clip = right_side, left_side
+
     results = []
-    for half_mask in (near_mask, far_mask):
+    for half_mask, side_clip in [(near_mask, near_side_clip),
+                                  (far_mask, far_side_clip)]:
         n_px = int(np.sum(half_mask > 0))
         if n_px < min_cc_area:
             results.append(None)
             continue
 
-        # Convex-hull gap fill on this half
+        # Convex-hull gap fill on this half, clipped to its own side
         contours, _ = cv2.findContours(half_mask, cv2.RETR_EXTERNAL,
                                        cv2.CHAIN_APPROX_SIMPLE)
         hull_mask = np.zeros_like(half_mask)
@@ -2288,6 +2302,8 @@ def split_combined_doors(combined_img, base_img, mode="offcharge",
                 continue
             hull = cv2.convexHull(c)
             cv2.drawContours(hull_mask, [hull], 0, 255, -1)
+        # Clip hull to this side of the split to prevent cross-side leakage
+        hull_mask = hull_mask & side_clip
         soft_change = (diff > 1).astype(np.uint8) * 255
         hull_filled = hull_mask & soft_change
         final_mask = np.maximum(half_mask, hull_filled)
