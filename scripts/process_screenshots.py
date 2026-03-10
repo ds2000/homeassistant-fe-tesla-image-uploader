@@ -1265,6 +1265,41 @@ def process_climate_panel(img_path, target_size=CLIMATE_SIZE, verbose=False,
     # Get filled car mask (fills holes in glass/interior areas)
     car_mask = get_car_mask_filled(img_bgr, bg_uint8, threshold=12)
 
+    # ── Car bottom correction ──
+    # On some models (Model Y), a full-width UI drag bar sits directly
+    # below the car rear, bridging it to the HVAC controls underneath.
+    # The flood-fill in get_car_mask_filled can't pass this bar, so
+    # everything below it gets included in the car mask, inflating
+    # car bounds by ~600+ rows and breaking crop + inpainting.
+    #
+    # Detect the bar by looking at raw non-bg row coverage: the car
+    # body tapers to <0.5 coverage, then the bar jumps to >0.90.
+    bg_bgr = bg_uint8[::-1]
+    raw_diff = np.sqrt(np.sum(
+        (img_bgr.astype(np.float64) - bg_bgr.reshape(1, 1, 3).astype(np.float64)) ** 2,
+        axis=2))
+    raw_non_bg = (raw_diff > 12).astype(np.uint8)
+    raw_row_cov = np.sum(raw_non_bg > 0, axis=1).astype(float) / iw
+
+    # Scan from image midpoint downward for the coverage jump
+    car_bottom_cutoff = None
+    mid_y = ih // 2
+    for y in range(mid_y, ih - 5):
+        if raw_row_cov[y] < 0.50 and raw_row_cov[y + 1] > 0.90:
+            car_bottom_cutoff = y
+            break
+        # Also catch gradual taper then sudden jump within 10 rows
+        if (raw_row_cov[y] < 0.50
+                and y + 10 < ih
+                and np.max(raw_row_cov[y + 1:y + 11]) > 0.90):
+            car_bottom_cutoff = y
+            break
+
+    if car_bottom_cutoff is not None:
+        car_mask[car_bottom_cutoff:, :] = 0
+        if verbose:
+            print(f"    Car bottom correction: zeroed mask below y={car_bottom_cutoff}")
+
     # Derive car bounds from the actual car mask, excluding the top 5% of
     # the image where status bar elements can merge with the car region.
     # This prevents status bar pixels from inflating the car bounds, which
@@ -2539,6 +2574,23 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
             arr = np.array(overlay)
             n = int(np.sum(arr[:, :, 3] > 0))
             print(f"  {out_name}: {n} opaque px")
+
+    # Generate all-doors overlay (all 4 doors open simultaneously).
+    # This replaces compositing nf-nr-combined + ff-fr-combined at
+    # runtime — through the glass of one side, the base image would
+    # show closed body instead of the other side's open doors.
+    all_doors_path = processed_dir / "all-doors.png"
+    if all_doors_path.exists():
+        all_doors_img = _apply_ref_shift(
+            Image.open(str(all_doors_path)).convert("RGBA"))
+        overlay = _compute_overlay(all_doors_img, base_img,
+                                   remove_cable=(mode == "oncharge"))
+        out_name = f"{prefix}all-doors-overlay.png"
+        overlay.save(str(output_dir / out_name), "PNG")
+        count += 1
+        print(f"  Saved {out_name}")
+    elif verbose:
+        print(f"  Skipping all-doors overlay: {all_doors_path} not found")
 
     # Copy panel backgrounds — oncharge gets '-charging' suffix for the card
     for panel in ("controls-bg", "climate-bg"):
