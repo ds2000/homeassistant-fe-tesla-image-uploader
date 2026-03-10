@@ -1884,33 +1884,56 @@ def process_all(input_dir, output_dir, reference_dir=None, manifest_path=None,
                     print(f"    {far_out}: skipped (no significant pixels)")
 
         # Derive same-side combined overlays (nf-nr-combined, ff-fr-combined)
-        # Always composite from individual door images — the all-doors split
-        # can't reliably separate near/far when door pixels cross the center.
-        same_side_combos = (COMBINED_PATTERNS_ONCHARGE if mode == "oncharge"
-                            else COMBINED_PATTERNS_OFFCHARGE)
-        for combo_name, (_stems, constituents) in same_side_combos.items():
-            # Check if both constituent door images exist
-            parts = [f"{c}-open" for c in constituents]
-            if all(p in processed_images for p in parts):
-                # Always composite rear door first, front door on top.
-                # The door panels don't spatially overlap — only the gap/
-                # interior regions do.  In the overlap zone, the front-door
-                # overlay correctly shows the open-front-door interior that
-                # would be visible through the rear door gap when both doors
-                # are open.  This holds for both camera angles.
-                z_ordered = list(reversed(parts))  # rear first, front on top
-                print(f"  Compositing {combo_name} from {' + '.join(z_ordered)}")
+        # Split all_doors.png into near/far halves — this captures the actual
+        # appearance when both same-side doors are open simultaneously, rather
+        # than compositing separate front_doors/rear_doors extractions.
+        all_doors_img = processed_images.get("all-doors")
+        if all_doors_img is not None:
+            near_overlay, far_overlay = split_combined_doors(
+                all_doors_img, base_img, mode=mode, verbose=verbose)
+
+            # Determine which combo name is near-side vs far-side
+            if mode == "oncharge":
+                near_combo, far_combo = "nf-nr-combined", "ff-fr-combined"
+            else:
+                near_combo, far_combo = "nf-nr-combined", "ff-fr-combined"
+
+            if near_overlay is not None:
                 combo_img = base_img.copy()
-                for p in z_ordered:
-                    door_img = processed_images[p]
-                    # Compute overlay vs base to get just the changed pixels
-                    overlay = _compute_overlay(door_img, base_img,
-                                               remove_cable=(mode == "oncharge"))
-                    combo_img.paste(overlay, (0, 0), overlay)
-                out_path = output_dir / f"{combo_name}.png"
+                combo_img.paste(near_overlay, (0, 0), near_overlay)
+                out_path = output_dir / f"{near_combo}.png"
                 combo_img.save(str(out_path), "PNG")
-                processed_images[combo_name] = combo_img
-                print(f"    Saved {combo_name}.png")
+                processed_images[near_combo] = combo_img
+                n = int(np.sum(np.array(near_overlay)[:, :, 3] > 0))
+                print(f"  Split all-doors → {near_combo}.png ({n} opaque px)")
+
+            if far_overlay is not None:
+                combo_img = base_img.copy()
+                combo_img.paste(far_overlay, (0, 0), far_overlay)
+                out_path = output_dir / f"{far_combo}.png"
+                combo_img.save(str(out_path), "PNG")
+                processed_images[far_combo] = combo_img
+                n = int(np.sum(np.array(far_overlay)[:, :, 3] > 0))
+                print(f"  Split all-doors → {far_combo}.png ({n} opaque px)")
+        else:
+            # Fallback: composite from individual door images if no all_doors
+            same_side_combos = (COMBINED_PATTERNS_ONCHARGE if mode == "oncharge"
+                                else COMBINED_PATTERNS_OFFCHARGE)
+            for combo_name, (_stems, constituents) in same_side_combos.items():
+                parts = [f"{c}-open" for c in constituents]
+                if all(p in processed_images for p in parts):
+                    z_ordered = list(reversed(parts))
+                    print(f"  Compositing {combo_name} from {' + '.join(z_ordered)}")
+                    combo_img = base_img.copy()
+                    for p in z_ordered:
+                        door_img = processed_images[p]
+                        overlay = _compute_overlay(door_img, base_img,
+                                                   remove_cable=(mode == "oncharge"))
+                        combo_img.paste(overlay, (0, 0), overlay)
+                    out_path = output_dir / f"{combo_name}.png"
+                    combo_img.save(str(out_path), "PNG")
+                    processed_images[combo_name] = combo_img
+                    print(f"    Saved {combo_name}.png")
 
         print()
 
