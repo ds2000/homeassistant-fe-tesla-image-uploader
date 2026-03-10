@@ -1,0 +1,214 @@
+{
+  "input_dir": "submissions/Y/Y.1/deep_blue_metallic",
+  "output_dir": "processed/offcharge",
+  "images": [
+    {
+      "input_file": "submissions/Y/Y.1/deep_blue_metallic/closed.png",
+      "input_size": [
+        1080,
+        2384
+      ],
+      "bg_color": [
+        16,
+        16,
+        17
+      ],
+      "car_bounds": [
+        184,
+        568,
+        902,
+        1021
+      ],
+      "crop_frame": [
+        46,
+        482,
+        1039,
+        1106
+      ],
+      "confidence": 0.811,
+      "warnings": [],
+      "success": true,
+      "output_name": "base.png"
+    },
+    {
+      "input_file": "submissions/Y/Y.1/deep_blue_metallic/cp.png",
+      "input_size": [
+        1080,
+        2384
+      ],
+      "bg_color": [
+        16,
+        16,
+        17
+      ],
+      "car_bounds": [
+        184,
+        568,
+        904,
+        1021
+      ],
+      "crop_frame": [
+        46,
+        482,
+        1039,
+        1106
+      ],
+      "confidence": 0.812,
+      "warnings": [],
+      "success": true,
+      "output_name": "chargeport-open.png"
+    },
+    {
+      "input_file": "submissions/Y/Y.1/deep_blue_metallic/cp_ft.png",
+      "input_size": [
+        1080,
+        2384
+      ],
+      "bg_color": [
+        16,
+        16,
+        17
+      ],
+      "car_bounds": [
+        184,
+        568,
+        902,
+        1021
+      ],
+      "crop_frame": [
+        46,
+        482,
+        1039,
+        1106
+      ],
+      "confidence": 0.809,
+      "warnings": [],
+      "success": true,
+      "output_name": "frunk-open.png"
+    },
+    {
+      "input_file": "submissions/Y/Y.1/deep_blue_metallic/rt.png",
+      "input_size": [
+        1080,
+        2398
+      ],
+      "bg_color": [
+        16,
+        16,
+        17
+      ],
+      "car_bounds": [
+        184,
+        446,
+        910,
+        1035
+      ],
+      "crop_frame": [
+        46,
+        482,
+        1039,
+        1106
+      ],
+      "confidence": 0.695,
+      "warnings": [],
+      "success": true,
+      "output_name": "trunk-open.png"
+    },
+    {
+      "input_file": "submissions/Y/Y.1/deep_blue_metallic/front_doors.png",
+      "input_size": [
+        1080,
+        2398
+      ],
+      "bg_color": [
+        16,
+        16,
+        17
+      ],
+      "car_bounds": [
+        184,
+        582,
+        902,
+        1035
+      ],
+      "crop_frame": [
+        46,
+        482,
+        1039,
+        1106
+      ],
+      "confidence": 0.818,
+      "warnings": [],
+      "success": true,
+      "output_name": "front-doors.png"
+    },
+    {
+      "input_file": "submissions/Y/Y.1/deep_blue_metallic/rear_doors.png",
+      "input_size": [
+        1080,
+        2398
+      ],
+      "bg_color": [
+        16,
+        16,
+        17
+      ],
+      "car_bounds": [
+        184,
+        579,
+        909,
+        1035
+      ],
+      "crop_frame": [
+        46,
+        482,
+        1039,
+        1106
+      ],
+      "confidence": 0.813,
+      "warnings": [],
+      "success": true,
+      "output_name": "rear-doors.png"
+    },
+    {
+      "input_file": "submissions/Y/Y.1/deep_blue_metallic/top_controls.png",
+      "input_size": [
+        1080,
+        2398
+      ],
+      "car_bounds": [
+        172,
+        498,
+        907,
+        2117
+      ],
+      "warnings": [],
+      "success": true,
+      "output_name": "controls-bg.png"
+    },
+    {
+      "input_file": "submissions/Y/Y.1/deep_blue_metallic/top_climate.png",
+      "input_size": [
+        1080,
+        2384
+      ],
+      "car_bounds": [
+        49,
+        141,
+        1023,
+        1626
+      ],
+      "warnings": [],
+      "success": true,
+      "ui_zones_applied": 1,
+      "output_name": "climate-bg.png"
+    }
+  ],
+  "errors": [],
+  "summary": {
+    "total": 8,
+    "succeeded": 8,
+    "failed": 0
+  },
+  "success": true
+}
