@@ -2564,7 +2564,11 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
                 print(f"  Skipping {name}: {img_path} not found")
             continue
         state_img = _apply_ref_shift(Image.open(str(img_path)).convert("RGBA"))
+        # Chargeport is very small on some models (Model Y ~61px from front
+        # 3/4 view) — use a much lower CC area threshold to keep it.
+        cc_area = 10 if name == "chargeport" else 80
         overlay = _compute_overlay(state_img, base_img,
+                                   min_cc_area=cc_area,
                                    remove_cable=(mode == "oncharge"))
         out_name = f"{prefix}{name}-overlay.png"
         out_path = output_dir / out_name
