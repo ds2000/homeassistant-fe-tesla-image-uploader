@@ -2625,7 +2625,9 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
         state_img = _apply_ref_shift(Image.open(str(img_path)).convert("RGBA"))
         # Chargeport is very small on some models (Model Y ~61px from front
         # 3/4 view) — use a much lower CC area threshold to keep it.
-        cc_area = 10 if name == "chargeport" else 80
+        # Frunk hinge area has thin, fragmented pixel clusters that get
+        # dropped at 80px.  Use 10 — trunk leak is cleaned separately.
+        cc_area = 10 if name in ("chargeport", "frunk") else 80
         overlay = _compute_overlay(state_img, base_img,
                                    min_cc_area=cc_area,
                                    remove_cable=(mode == "oncharge"))
@@ -2648,13 +2650,39 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
     if frunk_overlay_path.exists() and trunk_overlay_path.exists():
         frunk_arr = np.array(Image.open(str(frunk_overlay_path)))
         trunk_arr = np.array(Image.open(str(trunk_overlay_path)))
-        # Zero frunk pixels where trunk overlay is opaque
         trunk_opaque = trunk_arr[:, :, 3] > 0
         frunk_arr[trunk_opaque, 3] = 0
         Image.fromarray(frunk_arr).save(str(frunk_overlay_path), "PNG")
         n = int(np.sum(frunk_arr[:, :, 3] > 0))
         if verbose:
             print(f"  {prefix}frunk-overlay.png: cleaned trunk leak → {n} opaque px")
+
+    # Clean door overlays: opening a door may reveal part of the hood/frunk
+    # area that shifts slightly, creating false diff pixels. These frunk-area
+    # pixels in door overlays cause visual "cutting" of the frunk when a door
+    # is toggled. Subtract frunk+trunk overlay pixels from each door overlay.
+    if frunk_overlay_path.exists():
+        frunk_arr = np.array(Image.open(str(frunk_overlay_path)))
+        frunk_mask = frunk_arr[:, :, 3] > 0
+        trunk_mask = np.zeros_like(frunk_mask)
+        if trunk_overlay_path.exists():
+            trunk_mask = np.array(Image.open(str(trunk_overlay_path)))[:, :, 3] > 0
+        body_mask = frunk_mask | trunk_mask
+        for name in overlays_list:
+            if name in ("chargeport", "frunk"):
+                continue
+            door_path = output_dir / f"{prefix}{name}-overlay.png"
+            if not door_path.exists():
+                continue
+            door_arr = np.array(Image.open(str(door_path)))
+            before = int(np.sum(door_arr[:, :, 3] > 0))
+            door_arr[body_mask, 3] = 0
+            after = int(np.sum(door_arr[:, :, 3] > 0))
+            if before != after:
+                Image.fromarray(door_arr).save(str(door_path), "PNG")
+                if verbose:
+                    print(f"  {prefix}{name}-overlay.png: cleaned frunk/trunk leak "
+                          f"({before - after} px removed)")
 
     # Generate combined overlays
     combined_patterns = (COMBINED_PATTERNS_ONCHARGE if mode == "oncharge"

@@ -348,6 +348,27 @@ class TestFrunk:
             f"trunk contamination from cp_ft.png"
         )
 
+    def test_door_overlays_dont_cut_frunk(self, processed_offcharge):
+        """No door overlay should contain frunk pixels.
+
+        Opening a door may reveal part of the hood that shifts slightly,
+        creating false diff pixels.  The pipeline must subtract frunk/trunk
+        pixels from door overlays to prevent visual 'cutting' of the frunk.
+        """
+        frunk = _load_rgba(processed_offcharge / "overlays" / "frunk-overlay.png")
+        frunk_opaque = frunk[:, :, 3] > 0
+        for name in ["nf", "nr", "ff", "fr"]:
+            path = processed_offcharge / "overlays" / f"{name}-overlay.png"
+            if not path.exists():
+                continue
+            door = _load_rgba(path)
+            overlap = (door[:, :, 3] > 0) & frunk_opaque
+            n = np.sum(overlap)
+            assert n == 0, (
+                f"{name}-overlay has {n} pixels overlapping with frunk — "
+                f"door would visually cut the frunk"
+            )
+
 
 # ---------------------------------------------------------------------------
 # Combined-door overlays (near/far side separation)
