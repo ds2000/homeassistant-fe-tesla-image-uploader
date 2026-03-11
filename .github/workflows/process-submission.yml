@@ -62,7 +62,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python dependencies
-        run: pip install opencv-python-headless numpy Pillow
+        run: pip install -r requirements.txt
 
       - name: Run validation
         id: validate
