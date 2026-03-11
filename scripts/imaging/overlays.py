@@ -501,28 +501,75 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
         if verbose:
             print(f"  {prefix}frunk-overlay.png: cleaned trunk leak -> {n} opaque px")
 
-    # Fill frunk concavity
+    # Expand frunk to cover full bonnet/hood shape.
+    # On dark-painted cars the flat hood panels have near-zero RGB diff between
+    # frunk-open and closed states, so the diff-based overlay misses them.
+    # Strategy: isolate main CC, scanline-fill interior gaps, dilate outward
+    # proportional to the CC size, flood-fill interior, then smooth.
     if frunk_overlay_path.exists():
         frunk_arr = np.array(Image.open(str(frunk_overlay_path)))
         frunk_alpha = frunk_arr[:, :, 3]
         if np.any(frunk_alpha > 0):
-            close_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (35, 35))
-            closed = cv2.morphologyEx(frunk_alpha, cv2.MORPH_CLOSE, close_k)
-            h_f, w_f = closed.shape
-            ff_mask = np.zeros((h_f + 2, w_f + 2), dtype=np.uint8)
-            filled = closed.copy()
-            cv2.floodFill(filled, ff_mask, (0, 0), 128)
-            holes = (filled == 0).astype(np.uint8) * 255
-            new_alpha = np.maximum(closed, holes)
-            new_alpha = cv2.GaussianBlur(new_alpha, (7, 7), 0)
-            new_alpha = (new_alpha > 128).astype(np.uint8) * 255
             before_fill = int(np.sum(frunk_alpha > 0))
+            h_f, w_f = frunk_alpha.shape
+
+            # 1. Isolate the main hood body (largest CC) to avoid
+            #    thin hinge lines or small artifacts inflating the shape.
+            n_cc_f, labels_f, stats_f, _ = cv2.connectedComponentsWithStats(
+                frunk_alpha, 8)
+            main_mask = frunk_alpha.copy()
+            if n_cc_f > 2:
+                largest_cc = 1 + int(np.argmax(stats_f[1:, cv2.CC_STAT_AREA]))
+                main_mask = ((labels_f == largest_cc) * 255).astype(np.uint8)
+
+            # 2. Scanline fill: bridge interior gaps row by row
+            for y_row in range(h_f):
+                xs_row = np.where(main_mask[y_row, :] > 0)[0]
+                if len(xs_row) >= 2:
+                    main_mask[y_row, xs_row.min():xs_row.max() + 1] = 255
+
+            # 3. Dilate proportional to main CC diagonal (~30%).
+            ys_cc, xs_cc = np.where(main_mask > 0)
+            cc_diag = np.sqrt((xs_cc.max() - xs_cc.min()) ** 2 +
+                              (ys_cc.max() - ys_cc.min()) ** 2)
+            dil_size = max(11, int(cc_diag * 0.30) | 1)  # ensure odd
+            dil_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                              (dil_size, dil_size))
+            dilated = cv2.dilate(main_mask, dil_k)
+
+            # 4. Flood-fill interior of dilated shape
+            ff_mask = np.zeros((h_f + 2, w_f + 2), dtype=np.uint8)
+            filled_d = dilated.copy()
+            cv2.floodFill(filled_d, ff_mask, (0, 0), 128)
+            interior = (filled_d == 0).astype(np.uint8) * 255
+            expanded = np.maximum(dilated, interior)
+            # Re-add any non-main frunk pixels (hinge etc.)
+            expanded = np.maximum(expanded, frunk_alpha)
+
+            # 5. Re-subtract trunk (may have been re-introduced by dilation)
+            if trunk_overlay_path.exists():
+                trunk_a = np.array(
+                    Image.open(str(trunk_overlay_path)))[:, :, 3]
+                expanded[trunk_a > 0] = 0
+
+            # 6. Smooth edges
+            expanded = cv2.GaussianBlur(expanded, (7, 7), 0)
+            new_alpha = (expanded > 128).astype(np.uint8) * 255
+
+            # Assign RGB from frunk-open source for newly covered pixels
+            frunk_src_path = processed_dir / "frunk-open.png"
+            if frunk_src_path.exists():
+                frunk_src = np.array(
+                    Image.open(str(frunk_src_path)).convert("RGBA"))
+                new_px = (new_alpha > 0) & (frunk_alpha == 0)
+                frunk_arr[new_px, :3] = frunk_src[new_px, :3]
+
             frunk_arr[:, :, 3] = new_alpha
             after_fill = int(np.sum(new_alpha > 0))
             if after_fill > before_fill:
                 Image.fromarray(frunk_arr).save(str(frunk_overlay_path), "PNG")
                 if verbose:
-                    print(f"  {prefix}frunk-overlay.png: filled concavity "
+                    print(f"  {prefix}frunk-overlay.png: expanded bonnet "
                           f"(+{after_fill - before_fill} px -> {after_fill})")
 
     # Clean door overlays: subtract frunk+trunk from doors
@@ -578,15 +625,17 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
         modified = False
 
         if np.any(c_alpha > 0):
+            # Scanline fill interior gaps
+            h_c, w_c = c_alpha.shape
+            scan_filled = c_alpha.copy()
+            for y_row in range(h_c):
+                xs_row = np.where(c_alpha[y_row, :] > 0)[0]
+                if len(xs_row) >= 2:
+                    scan_filled[y_row, xs_row.min():xs_row.max() + 1] = 255
+            # Morph close to bridge remaining gaps
             close_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (35, 35))
-            closed = cv2.morphologyEx(c_alpha, cv2.MORPH_CLOSE, close_k)
-            h_f, w_f = closed.shape
-            ff_mask = np.zeros((h_f + 2, w_f + 2), dtype=np.uint8)
-            filled = closed.copy()
-            cv2.floodFill(filled, ff_mask, (0, 0), 128)
-            holes = (filled == 0).astype(np.uint8) * 255
-            new_alpha = np.maximum(closed, holes)
-            new_alpha = cv2.GaussianBlur(new_alpha, (7, 7), 0)
+            closed = cv2.morphologyEx(scan_filled, cv2.MORPH_CLOSE, close_k)
+            new_alpha = cv2.GaussianBlur(closed, (7, 7), 0)
             new_alpha = (new_alpha > 128).astype(np.uint8) * 255
             before_fill = int(np.sum(c_alpha > 0))
             after_fill = int(np.sum(new_alpha > 0))
