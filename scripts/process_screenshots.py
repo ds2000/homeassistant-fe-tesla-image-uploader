@@ -2698,6 +2698,11 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
             cv2.floodFill(filled, ff_mask, (0, 0), 128)
             holes = (filled == 0).astype(np.uint8) * 255
             new_alpha = np.maximum(closed, holes)
+            # Smooth staircase edges from morphological close: Gaussian
+            # blur softens the jagged boundary, then threshold recovers
+            # a clean binary mask with natural-looking contours.
+            new_alpha = cv2.GaussianBlur(new_alpha, (7, 7), 0)
+            new_alpha = (new_alpha > 128).astype(np.uint8) * 255
             before_fill = int(np.sum(frunk_alpha > 0))
             frunk_arr[:, :, 3] = new_alpha
             after_fill = int(np.sum(new_alpha > 0))
@@ -2777,6 +2782,9 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
             cv2.floodFill(filled, ff_mask, (0, 0), 128)
             holes = (filled == 0).astype(np.uint8) * 255
             new_alpha = np.maximum(closed, holes)
+            # Smooth staircase edges from morphological close
+            new_alpha = cv2.GaussianBlur(new_alpha, (7, 7), 0)
+            new_alpha = (new_alpha > 128).astype(np.uint8) * 255
             before_fill = int(np.sum(c_alpha > 0))
             after_fill = int(np.sum(new_alpha > 0))
             if after_fill > before_fill:
@@ -2786,9 +2794,12 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
                     print(f"  {prefix}{cname}-overlay.png: filled concavity "
                           f"(+{after_fill - before_fill} px → {after_fill})")
 
-        # 2. Remove cross-side leakage: subtract opposite-side door overlays
-        # (done AFTER fill so fill can't re-introduce leaked pixels)
-        opposite = [n for n in overlays_list if n not in constituents]
+        # 2. Remove cross-side leakage: subtract opposite-side DOOR overlays
+        # only.  We must NOT subtract frunk/trunk/chargeport here — the
+        # frunk overlay has been expanded by concavity fill and would erase
+        # legitimate far-side door pixels that sit in the frunk bounding area.
+        door_names = {"nf", "nr", "ff", "fr"}
+        opposite = [n for n in door_names if n not in constituents]
         for opp_name in opposite:
             opp_path = output_dir / f"{prefix}{opp_name}-overlay.png"
             if not opp_path.exists():
