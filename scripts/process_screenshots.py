@@ -1054,19 +1054,41 @@ def process_sideview(img_path, crop_frame, target_size=SIDE_VIEW_SIZE,
     # Normalize background to a single uniform colour.
     # remove_sideview_ui fills the scan zone with the detected bg_color, but
     # LANCZOS resize introduces slight shade shifts (e.g. 22→21).  Detect the
-    # dominant background shade from edge strips and replace all bg pixels.
+    # dominant background shade from edge strips and replace bg-like pixels that
+    # are NOT inside the car body region.  This avoids destroying dark interior
+    # details (engine bay, etc.) that sit near background brightness.
     res_arr = np.array(result)
     rh, rw = res_arr.shape[:2]
+    edge_w = max(1, rw // 10)
     edge_pixels = np.concatenate([
-        res_arr[:, :max(1, rw // 10), :3].reshape(-1, 3),   # left 10%
-        res_arr[:, rw - max(1, rw // 10):, :3].reshape(-1, 3),  # right 10%
+        res_arr[:, :edge_w, :3].reshape(-1, 3),
+        res_arr[:, rw - edge_w:, :3].reshape(-1, 3),
     ], axis=0).astype(np.float64)
     dominant_bg = np.median(edge_pixels, axis=0).astype(np.uint8)
     res_rgb = res_arr[:, :, :3]
     bg_dist = np.sqrt(np.sum(
         (res_rgb.astype(np.float64) - dominant_bg.astype(np.float64)) ** 2,
         axis=2))
-    bg_px = bg_dist < BG_DISTANCE_THRESHOLD
+    # Only normalize pixels that are clearly background: within threshold AND
+    # connected to the image border (flood-fill from edges).  Interior dark
+    # pixels (engine bay, wheel wells) are left untouched.
+    candidate = (bg_dist < BG_DISTANCE_THRESHOLD).astype(np.uint8) * 255
+    # Seed from all 4 edges
+    seed = np.zeros_like(candidate)
+    seed[0, :] = candidate[0, :]
+    seed[-1, :] = candidate[-1, :]
+    seed[:, 0] = candidate[:, 0]
+    seed[:, -1] = candidate[:, -1]
+    # Morphological reconstruction: grow seed within candidate bounds
+    k = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    bg_mask = seed.copy()
+    for _ in range(max(rh, rw)):
+        grown = cv2.dilate(bg_mask, k, iterations=1)
+        grown = cv2.bitwise_and(grown, candidate)
+        if np.array_equal(grown, bg_mask):
+            break
+        bg_mask = grown
+    bg_px = bg_mask > 0
     for c in range(3):
         res_arr[:, :, c] = np.where(bg_px, dominant_bg[c], res_arr[:, :, c])
     result = Image.fromarray(res_arr)
@@ -2656,6 +2678,35 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
         n = int(np.sum(frunk_arr[:, :, 3] > 0))
         if verbose:
             print(f"  {prefix}frunk-overlay.png: cleaned trunk leak → {n} opaque px")
+
+    # Fill frunk concavity: on dark-coloured cars (e.g. deep blue), the body
+    # paint in the hinge/rim zone between the raised hood and the frunk well
+    # barely changes colour when the frunk opens (diff ≈ 0).  This leaves a
+    # crescent-shaped gap in the overlay where the closed-hood base shows
+    # through.  Fix: morphological close bridges the gap, then flood-fill
+    # from exterior identifies interior holes, which are filled in.
+    if frunk_overlay_path.exists():
+        frunk_arr = np.array(Image.open(str(frunk_overlay_path)))
+        frunk_alpha = frunk_arr[:, :, 3]
+        if np.any(frunk_alpha > 0):
+            close_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (35, 35))
+            closed = cv2.morphologyEx(frunk_alpha, cv2.MORPH_CLOSE, close_k)
+            # Flood-fill exterior from (0,0) to find interior holes
+            h_f, w_f = closed.shape
+            ff_mask = np.zeros((h_f + 2, w_f + 2), dtype=np.uint8)
+            filled = closed.copy()
+            cv2.floodFill(filled, ff_mask, (0, 0), 128)
+            holes = (filled == 0).astype(np.uint8) * 255
+            new_alpha = np.maximum(closed, holes)
+            before_fill = int(np.sum(frunk_alpha > 0))
+            frunk_arr[:, :, 3] = new_alpha
+            after_fill = int(np.sum(new_alpha > 0))
+            if after_fill > before_fill:
+                Image.fromarray(frunk_arr).save(
+                    str(frunk_overlay_path), "PNG")
+                if verbose:
+                    print(f"  {prefix}frunk-overlay.png: filled concavity "
+                          f"(+{after_fill - before_fill} px → {after_fill})")
 
     # Clean door overlays: opening a door may reveal part of the hood/frunk
     # area that shifts slightly, creating false diff pixels. These frunk-area
