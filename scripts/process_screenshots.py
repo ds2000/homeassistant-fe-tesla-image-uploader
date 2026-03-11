@@ -2754,6 +2754,59 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
             n = int(np.sum(arr[:, :, 3] > 0))
             print(f"  {out_name}: {n} opaque px")
 
+    # Fill concavities in combined overlays and remove cross-side leakage.
+    # Same dark-paint gap problem as frunk: door panels barely change colour
+    # when opened, leaving transparent holes.  Also, the all-doors split can
+    # leak far-side pixels into near-side combined overlays (and vice versa)
+    # when doors overlap in x-space.
+    for cname, (_stems, constituents) in combined_patterns.items():
+        c_overlay_path = output_dir / f"{prefix}{cname}-overlay.png"
+        if not c_overlay_path.exists():
+            continue
+        c_arr = np.array(Image.open(str(c_overlay_path)))
+        c_alpha = c_arr[:, :, 3]
+        modified = False
+
+        # 1. Fill concavity first (same approach as frunk)
+        if np.any(c_alpha > 0):
+            close_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (35, 35))
+            closed = cv2.morphologyEx(c_alpha, cv2.MORPH_CLOSE, close_k)
+            h_f, w_f = closed.shape
+            ff_mask = np.zeros((h_f + 2, w_f + 2), dtype=np.uint8)
+            filled = closed.copy()
+            cv2.floodFill(filled, ff_mask, (0, 0), 128)
+            holes = (filled == 0).astype(np.uint8) * 255
+            new_alpha = np.maximum(closed, holes)
+            before_fill = int(np.sum(c_alpha > 0))
+            after_fill = int(np.sum(new_alpha > 0))
+            if after_fill > before_fill:
+                c_alpha = new_alpha
+                modified = True
+                if verbose:
+                    print(f"  {prefix}{cname}-overlay.png: filled concavity "
+                          f"(+{after_fill - before_fill} px → {after_fill})")
+
+        # 2. Remove cross-side leakage: subtract opposite-side door overlays
+        # (done AFTER fill so fill can't re-introduce leaked pixels)
+        opposite = [n for n in overlays_list if n not in constituents]
+        for opp_name in opposite:
+            opp_path = output_dir / f"{prefix}{opp_name}-overlay.png"
+            if not opp_path.exists():
+                continue
+            opp_arr = np.array(Image.open(str(opp_path)))
+            opp_mask = opp_arr[:, :, 3] > 0
+            leaked = np.sum(c_alpha[opp_mask] > 0)
+            if leaked > 0:
+                c_alpha[opp_mask] = 0
+                modified = True
+                if verbose:
+                    print(f"  {prefix}{cname}-overlay.png: removed {leaked} "
+                          f"px from {opp_name}")
+
+        if modified:
+            c_arr[:, :, 3] = c_alpha
+            Image.fromarray(c_arr).save(str(c_overlay_path), "PNG")
+
     # Generate all-doors overlay (all 4 doors open simultaneously).
     # This replaces compositing nf-nr-combined + ff-fr-combined at
     # runtime — through the glass of one side, the base image would
