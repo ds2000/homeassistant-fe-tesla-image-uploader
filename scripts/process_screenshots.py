@@ -1051,6 +1051,26 @@ def process_sideview(img_path, crop_frame, target_size=SIDE_VIEW_SIZE,
     else:
         result = cropped.resize(target_size, Image.Resampling.LANCZOS)
 
+    # Normalize background to a single uniform colour.
+    # remove_sideview_ui fills the scan zone with the detected bg_color, but
+    # LANCZOS resize introduces slight shade shifts (e.g. 22→21).  Detect the
+    # dominant background shade from edge strips and replace all bg pixels.
+    res_arr = np.array(result)
+    rh, rw = res_arr.shape[:2]
+    edge_pixels = np.concatenate([
+        res_arr[:, :max(1, rw // 10), :3].reshape(-1, 3),   # left 10%
+        res_arr[:, rw - max(1, rw // 10):, :3].reshape(-1, 3),  # right 10%
+    ], axis=0).astype(np.float64)
+    dominant_bg = np.median(edge_pixels, axis=0).astype(np.uint8)
+    res_rgb = res_arr[:, :, :3]
+    bg_dist = np.sqrt(np.sum(
+        (res_rgb.astype(np.float64) - dominant_bg.astype(np.float64)) ** 2,
+        axis=2))
+    bg_px = bg_dist < BG_DISTANCE_THRESHOLD
+    for c in range(3):
+        res_arr[:, :, c] = np.where(bg_px, dominant_bg[c], res_arr[:, :, c])
+    result = Image.fromarray(res_arr)
+
     if verbose:
         print(f"    Crop frame: ({cx0},{cy0})-({cx1},{cy1}) = {cx1-cx0}x{cy1-cy0}")
         out_size = result.size
