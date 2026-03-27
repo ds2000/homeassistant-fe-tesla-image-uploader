@@ -134,6 +134,7 @@ jobs:
         if: steps.validate.outputs.validation_passed == 'true'
         env:
           SUBMISSION_DIR: ${{ steps.detect.outputs.submission_dir }}
+          MODEL: ${{ steps.detect.outputs.model }}
           HAS_REF: ${{ steps.reference.outputs.has_reference }}
         run: |
           REF_ARGS=""
@@ -145,6 +146,7 @@ jobs:
             --output-dir processed/offcharge/ \
             --mode offcharge \
             --generate-overlays \
+            --model "$MODEL" \
             --verbose \
             $REF_ARGS
 
@@ -152,6 +154,7 @@ jobs:
         if: steps.validate.outputs.validation_passed == 'true'
         env:
           SUBMISSION_DIR: ${{ steps.detect.outputs.submission_dir }}
+          MODEL: ${{ steps.detect.outputs.model }}
           HAS_REF: ${{ steps.reference.outputs.has_reference }}
         run: |
           REF_ARGS=""
@@ -163,6 +166,7 @@ jobs:
             --output-dir processed/oncharge/ \
             --mode oncharge \
             --generate-overlays \
+            --model "$MODEL" \
             --verbose \
             $REF_ARGS
 
