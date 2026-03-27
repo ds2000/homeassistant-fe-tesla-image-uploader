@@ -25,8 +25,9 @@ DIFF_THRESHOLD = 18  # Euclidean RGB distance to count as changed pixel
 
 # Z-order from bottom to top (furthest -> nearest to camera).
 # Elements applied later overwrite earlier ones where they overlap.
-# Offcharge is a front 3/4 view: front doors are nearest to camera.
-OFFCHARGE_OVERLAYS = ["chargeport", "frunk", "fr", "ff", "nr", "nf"]
+# Offcharge is a front 3/4 view: raised frunk covers far-side doors,
+# near-side doors are nearest to camera.
+OFFCHARGE_OVERLAYS = ["chargeport", "fr", "ff", "frunk", "nr", "nf"]
 # Oncharge is a rear 3/4 view: rear doors are nearest to camera.
 ONCHARGE_OVERLAYS = ["frunk", "ff", "fr", "nf", "nr"]
 

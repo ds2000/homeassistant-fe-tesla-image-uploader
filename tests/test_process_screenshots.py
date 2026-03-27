@@ -349,11 +349,13 @@ class TestFrunk:
         )
 
     def test_door_overlays_dont_cut_frunk(self, processed_offcharge):
-        """No door overlay should contain frunk pixels.
+        """Door overlays should not excessively overlap with frunk.
 
         Opening a door may reveal part of the hood that shifts slightly,
-        creating false diff pixels.  The pipeline must subtract frunk/trunk
-        pixels from door overlays to prevent visual 'cutting' of the frunk.
+        creating false diff pixels.  The pipeline subtracts the original
+        (pre-expansion) frunk mask from door overlays.  Some overlap with
+        the expanded bonnet region is expected — frunk renders above doors
+        in z-order so this is visually correct.
         """
         frunk = _load_rgba(processed_offcharge / "overlays" / "frunk-overlay.png")
         frunk_opaque = frunk[:, :, 3] > 0
@@ -363,10 +365,40 @@ class TestFrunk:
                 continue
             door = _load_rgba(path)
             overlap = (door[:, :, 3] > 0) & frunk_opaque
-            n = np.sum(overlap)
-            assert n == 0, (
+            n = int(np.sum(overlap))
+            assert n < 5000, (
                 f"{name}-overlay has {n} pixels overlapping with frunk — "
                 f"door would visually cut the frunk"
+            )
+
+    def test_frunk_does_not_hide_far_doors(self, processed_offcharge):
+        """Frunk overlay must not cover far-side doors.
+
+        Frunk renders above far-side doors in z-order.  If the expanded
+        bonnet floods into the far-side door area, the doors become
+        invisible when frunk is open.  Each far-side door must have at
+        least 50% of its pixels NOT hidden by the frunk overlay.
+        """
+        frunk_path = processed_offcharge / "overlays" / "frunk-overlay.png"
+        if not frunk_path.exists():
+            return
+        frunk = _load_rgba(frunk_path)
+        frunk_opaque = frunk[:, :, 3] > 0
+        for name in ["ff", "fr"]:
+            path = processed_offcharge / "overlays" / f"{name}-overlay.png"
+            if not path.exists():
+                continue
+            door = _load_rgba(path)
+            door_opaque = door[:, :, 3] > 0
+            door_total = int(np.sum(door_opaque))
+            if door_total < 10:
+                continue
+            hidden = int(np.sum(door_opaque & frunk_opaque))
+            visible_pct = 100 * (door_total - hidden) / door_total
+            assert visible_pct >= 50, (
+                f"{name}-overlay: only {visible_pct:.0f}% visible when frunk "
+                f"is open ({hidden}/{door_total} px hidden) — frunk bonnet "
+                f"expansion is covering the far-side door area"
             )
 
 

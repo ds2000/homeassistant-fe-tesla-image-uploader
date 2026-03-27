@@ -108,13 +108,28 @@ def _load_models_json():
 def _parse_submission_name(dir_name, models_data):
     """Parse a submission directory name into (model, variant, colour).
 
-    Format: {model_id}-{variant_id}-{colour_id}[-{hex_token}]
+    Supports two formats:
+      - Flat:   {model_id}-{variant_id}-{colour_id}[-{hex_token}]
+      - Nested: {model_id}/{variant_id}/{colour_id}
     Uses models.json for unambiguous parsing since variant IDs contain dots.
     Returns (model, variant, colour) or None if parsing fails.
     """
     if not models_data:
         return None
 
+    # Try nested format first (e.g. "3/3.1/deep_blue_metallic")
+    if "/" in dir_name:
+        parts = dir_name.split("/")
+        if len(parts) >= 3:
+            model_id, variant_id, colour_id = parts[0], parts[1], parts[2]
+            m = next((x for x in models_data["models"] if x["id"] == model_id), None)
+            if m:
+                v = next((x for x in m["variants"] if x["id"] == variant_id), None)
+                if v:
+                    if any(c["id"] == colour_id for c in v["colours"]):
+                        return (model_id, variant_id, colour_id)
+
+    # Flat format (e.g. "3-3.1-deep_blue_metallic-bd6d")
     for m in models_data["models"]:
         prefix = m["id"] + "-"
         if not dir_name.startswith(prefix):
@@ -364,13 +379,25 @@ class TestbedHandler(BaseHTTPRequestHandler):
         # source = "local" (filesystem dir) or the git ref string
         entries = {}
 
-        # Scan local submission directories that have processed output
+        # Scan local submission directories that have processed output.
+        # Handles both flat (submissions/3-3.1-colour/) and nested
+        # (submissions/3/3.1/colour/) directory layouts.
         submissions_root = REPO_ROOT / "submissions"
         if submissions_root.is_dir():
             for d in sorted(submissions_root.iterdir()):
-                if d.is_dir() and (d / "processed").is_dir():
+                if not d.is_dir():
+                    continue
+                if (d / "processed").is_dir():
                     name = f"submissions/{d.name}"
                     entries[name] = "local"
+                else:
+                    # Scan nested: submissions/{model}/{variant}/{colour}/
+                    for sub in sorted(d.rglob("processed")):
+                        if sub.is_dir():
+                            colour_dir = sub.parent
+                            rel = colour_dir.relative_to(submissions_root)
+                            name = f"submissions/{rel}"
+                            entries[name] = "local"
 
         # Scan local git branches
         try:
@@ -419,10 +446,15 @@ class TestbedHandler(BaseHTTPRequestHandler):
             combo_key = f"{model}/{variant}/{colour}"
 
             # Check if this branch has processed files
-            ref = source if source != "local" else name
-            has_processed = _git_read_file(ref, "processed/offcharge/overlays/base.png") is not None
-            if not has_processed and not ref.startswith("origin/"):
-                has_processed = _git_read_file("origin/" + ref, "processed/offcharge/overlays/base.png") is not None
+            if source == "local":
+                has_processed = (REPO_ROOT / name / "processed" / "offcharge" / "overlays" / "base.png").is_file()
+            else:
+                ref = source
+                # Processed files live inside the submission subdir on the branch
+                proc_path = f"{name}/processed/offcharge/overlays/base.png"
+                has_processed = _git_read_file(ref, proc_path) is not None
+                if not has_processed and not ref.startswith("origin/"):
+                    has_processed = _git_read_file("origin/" + ref, proc_path) is not None
 
             label = suffix
             if models_data:
@@ -447,7 +479,9 @@ class TestbedHandler(BaseHTTPRequestHandler):
             prev = best.get(combo_key)
             if prev is None:
                 best[combo_key] = entry
-            elif has_processed and not prev["has_processed"]:
+            elif source == "local" and has_processed:
+                best[combo_key] = entry  # prefer filesystem with processed files
+            elif has_processed and not prev["has_processed"] and prev["source"] != "local":
                 best[combo_key] = entry
             elif has_processed and prev["has_processed"] and is_local and prev["source"].startswith("origin/"):
                 best[combo_key] = entry  # prefer local over remote
@@ -918,11 +952,11 @@ class TestbedHandler(BaseHTTPRequestHandler):
         send_progress("offcharge", "Processing offcharge images...", 25)
         offcharge_ok = self._run_pipeline(
             offcharge_input, offcharge_output, "offcharge", pipeline_log,
-            send_log)
+            send_log, model=model)
         send_progress("oncharge", "Processing oncharge images...", 60)
         oncharge_ok = self._run_pipeline(
             oncharge_input, oncharge_output, "oncharge", pipeline_log,
-            send_log)
+            send_log, model=model)
 
         send_progress("done", "Finishing up...", 95)
         self.log_message("Processed submission: %s", submission_dir.name)
@@ -937,21 +971,25 @@ class TestbedHandler(BaseHTTPRequestHandler):
         })
 
     def _run_pipeline(self, input_dir, output_dir, mode, log,
-                      send_log=None):
+                      send_log=None, model=None):
         """Run process pipeline for one mode. Returns True on success."""
         script = str(SCRIPTS_DIR / "process_screenshots.py")
 
         log.append(f"=== Processing {mode} ===")
 
+        cmd = [sys.executable, "-u", script,
+               "--input-dir", str(input_dir),
+               "--output-dir", str(output_dir),
+               "--mode", mode,
+               "--generate-overlays",
+               "--full-res",
+               "--verbose"]
+        if model:
+            cmd.extend(["--model", model])
+
         # Stream stdout line-by-line for live progress
         proc = subprocess.Popen(
-            [sys.executable, "-u", script,
-             "--input-dir", str(input_dir),
-             "--output-dir", str(output_dir),
-             "--mode", mode,
-             "--generate-overlays",
-             "--full-res",
-             "--verbose"],
+            cmd,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, cwd=str(REPO_ROOT),
         )

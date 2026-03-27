@@ -497,6 +497,9 @@ def main():
                         help="Generate transparent overlay PNGs for runtime compositing")
     parser.add_argument("--full-res", action="store_true",
                         help="Output at native crop resolution (skip final resize)")
+    parser.add_argument("--model", default=None,
+                        help="Model ID (e.g. 'Y', '3') for model-specific "
+                             "processing such as pre-built frunk masks")
     args = parser.parse_args()
 
     if not Path(args.input_dir).is_dir():
@@ -552,6 +555,7 @@ def main():
         generate_overlays(
             args.output_dir, overlays_dir,
             mode=args.mode, verbose=args.verbose,
-            reference_dir=str(ref_overlays) if ref_overlays else None)
+            reference_dir=str(ref_overlays) if ref_overlays else None,
+            model=args.model)
 
     sys.exit(0 if report.get("success") else 1)

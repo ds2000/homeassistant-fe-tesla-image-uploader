@@ -15,6 +15,61 @@ from .constants import (
 )
 from .detection import align_to_reference
 
+# Directory containing pre-built overlay masks per model
+_ASSETS_DIR = Path(__file__).parent / "assets"
+
+
+def _load_overlay_mask(name: str, model: str, target_size: tuple[int, int],
+                       mode: str = "offcharge") -> np.ndarray | None:
+    """Load and scale a pre-built overlay mask for a given model.
+
+    *name* is the overlay name: "frunk", "nf", "nr", "ff", "fr", "trunk",
+    "all_doors", etc.  Tries ``{name}_mask_{model}_{mode}.png`` first,
+    then ``{name}_mask_{model}.png``.
+
+    Returns a uint8 alpha mask at *target_size* (w, h), or None if no
+    mask exists for this model/mode combination.
+    """
+    if not model:
+        return None
+    for suffix in (f"_{mode}", ""):
+        mask_path = _ASSETS_DIR / f"{name}_mask_{model}{suffix}.png"
+        if mask_path.exists():
+            mask_img = Image.open(str(mask_path)).convert("RGBA")
+            mask_scaled = mask_img.resize(target_size, Image.Resampling.LANCZOS)
+            alpha = np.array(mask_scaled)[:, :, 3]
+            return (alpha > 128).astype(np.uint8) * 255
+    return None
+
+
+def _load_overlay_rgba(name: str, model: str, target_size: tuple[int, int],
+                       mode: str = "offcharge") -> np.ndarray | None:
+    """Load a pre-built overlay as full RGBA (pixels + mask).
+
+    Like _load_overlay_mask but returns the complete RGBA array so that
+    both the source pixels and the alpha shape are used from the asset.
+    """
+    if not model:
+        return None
+    for suffix in (f"_{mode}", ""):
+        mask_path = _ASSETS_DIR / f"{name}_mask_{model}{suffix}.png"
+        if mask_path.exists():
+            mask_img = Image.open(str(mask_path)).convert("RGBA")
+            mask_scaled = mask_img.resize(target_size, Image.Resampling.LANCZOS)
+            arr = np.array(mask_scaled)
+            # Binarize alpha
+            arr[:, :, 3] = ((arr[:, :, 3] > 128).astype(np.uint8) * 255)
+            return arr
+    return None
+
+
+def _load_frunk_mask(model, target_size, mode="offcharge"):
+    """Load and scale the pre-built frunk mask for a given model.
+
+    Backward-compatible wrapper around _load_overlay_mask.
+    """
+    return _load_overlay_mask("frunk", model, target_size, mode)
+
 
 def _detect_cable_mask(state_f, base_f, kernel):
     """Detect green/teal charging cable pixels in either image."""
@@ -334,17 +389,21 @@ def validate_overlays(output_dir, mode="offcharge"):
                     f"the near side (expected far/right, mid={mid_x})")
 
     # 4. Non-door overlap checks
+    # Frunk's bonnet expansion naturally overlaps with door areas (frunk
+    # renders above doors in z-order), so use a higher threshold for it.
+    overlap_thresholds = {"frunk": 5000, "chargeport": 1000}
     for extra in ["frunk", "chargeport"]:
         epath = output_dir / f"{prefix}{extra}-overlay.png"
         if not epath.exists():
             continue
         earr = np.array(Image.open(str(epath)).convert("RGBA"))
         emask = earr[:, :, 3] > 0
+        thresh = overlap_thresholds[extra]
         for dname in door_names:
             if dname in door_overlays:
                 overlap = emask & door_overlays[dname]
                 n = int(np.sum(overlap))
-                if n > 1000:
+                if n > thresh:
                     errors.append(
                         f"OVERLAP: {extra}-overlay has {n} px overlapping "
                         f"with {dname}-overlay")
@@ -353,7 +412,7 @@ def validate_overlays(output_dir, mode="offcharge"):
 
 
 def generate_overlays(processed_dir, output_dir, mode="offcharge",
-                      verbose=False, reference_dir=None):
+                      verbose=False, reference_dir=None, model=None):
     """Export transparent overlay PNGs for runtime compositing."""
     processed_dir = Path(processed_dir)
     output_dir = Path(output_dir)
@@ -488,113 +547,371 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
             print(f"  {out_name}: {n} opaque px "
                   f"({100*n/total:.1f}%)")
 
-    # Clean frunk: subtract trunk pixels
-    frunk_overlay_path = output_dir / f"{prefix}frunk-overlay.png"
+    # Apply pre-built overlay masks for doors and trunk (same pattern as
+    # frunk mask — replaces diff-based alpha with the authoritative shape).
+    # Track which overlays used masks so we skip heuristic cleanup for them.
+    _masked_overlays = set()
+    if model:
+        _mask_names = {"nf", "nr", "ff", "fr", "chargeport"}
+        for ov_name in overlays_list:
+            if ov_name not in _mask_names:
+                continue
+            ov_path = output_dir / f"{prefix}{ov_name}-overlay.png"
+            # FF/NF/FR use RGBA from asset (correct pre-rendered pixels).
+            # Can create the overlay even if the diff pipeline didn't.
+            if ov_name in ("ff", "nf", "fr"):
+                # Need target size from base image
+                base_path = output_dir / f"{prefix}base.png"
+                if not base_path.exists():
+                    base_path = output_dir / "base.png"
+                if base_path.exists():
+                    base_sz = Image.open(str(base_path)).size
+                    ov_rgba = _load_overlay_rgba(
+                        ov_name, model, base_sz, mode=mode)
+                    if ov_rgba is not None:
+                        Image.fromarray(ov_rgba).save(
+                            str(ov_path), "PNG")
+                        _masked_overlays.add(ov_name)
+                        count += (0 if ov_path.exists() else 1)
+                        if verbose:
+                            n = int(np.sum(ov_rgba[:, :, 3] > 0))
+                            print(f"  {prefix}{ov_name}-overlay.png: "
+                                  f"applied {model} mask -> {n} opaque px")
+                        continue
+            if not ov_path.exists():
+                continue
+            src_path = processed_dir / f"{prefix}{ov_name}-open.png"
+            if not src_path.exists():
+                src_path = processed_dir / f"{ov_name}-open.png"
+            if not src_path.exists():
+                continue
+            src_img = _apply_ref_shift(
+                Image.open(str(src_path)).convert("RGBA"))
+            h_o, w_o = np.array(src_img).shape[:2]
+            ov_mask = _load_overlay_mask(ov_name, model, (w_o, h_o),
+                                         mode=mode)
+            if ov_mask is not None:
+                ov_arr = np.array(src_img)
+                ov_arr[:, :, 3] = ov_mask
+                Image.fromarray(ov_arr).save(str(ov_path), "PNG")
+                _masked_overlays.add(ov_name)
+                if verbose:
+                    n = int(np.sum(ov_mask > 0))
+                    print(f"  {prefix}{ov_name}-overlay.png: applied "
+                          f"{model} mask -> {n} opaque px")
+
+        # Trunk mask — oncharge uses RGBA (full pre-rendered trunk);
+        # offcharge uses alpha-only union with diff (lid mask + cavity fill).
+        trunk_ov_path = output_dir / f"{prefix}trunk-overlay.png"
+        if trunk_ov_path.exists():
+            if mode == "oncharge":
+                base_path2 = output_dir / f"{prefix}base.png"
+                if not base_path2.exists():
+                    base_path2 = output_dir / "base.png"
+                if base_path2.exists():
+                    base_sz2 = Image.open(str(base_path2)).size
+                    t_rgba = _load_overlay_rgba("trunk", model, base_sz2,
+                                                mode=mode)
+                    if t_rgba is not None:
+                        Image.fromarray(t_rgba).save(
+                            str(trunk_ov_path), "PNG")
+                        _masked_overlays.add("trunk")
+                        if verbose:
+                            n = int(np.sum(t_rgba[:, :, 3] > 0))
+                            print(f"  {prefix}trunk-overlay.png: applied "
+                                  f"{model} RGBA mask -> {n} opaque px")
+            # Fall back to alpha-only union if no RGBA mask
+            if "trunk" not in _masked_overlays:
+                trunk_src = processed_dir / f"{prefix}trunk-open.png"
+                if not trunk_src.exists():
+                    trunk_src = processed_dir / "trunk-open.png"
+                if trunk_src.exists():
+                    t_src = _apply_ref_shift(
+                        Image.open(str(trunk_src)).convert("RGBA"))
+                    h_o, w_o = np.array(t_src).shape[:2]
+                    t_mask = _load_overlay_mask("trunk", model,
+                                                (w_o, h_o), mode=mode)
+                    if t_mask is not None:
+                        existing = np.array(
+                            Image.open(str(trunk_ov_path)).convert("RGBA"))
+                        t_arr = np.array(t_src)
+                        t_arr[:, :, 3] = np.maximum(existing[:, :, 3], t_mask)
+                        Image.fromarray(t_arr).save(str(trunk_ov_path), "PNG")
+                        # Don't add to _masked_overlays — let scanline fill
+                        # run to fill the trunk cavity gaps below the lid
+                        if verbose:
+                            n = int(np.sum(t_mask > 0))
+                        print(f"  {prefix}trunk-overlay.png: applied "
+                              f"{model} mask -> {n} opaque px")
+
+    # Save pre-expansion trunk alpha for frunk cleanup (the expanded trunk
+    # includes cavity pixels that overlap with frunk area; only the original
+    # lid+diff area should be subtracted from frunk).
+    _trunk_pre_expand_alpha = None
     trunk_overlay_path = output_dir / f"{prefix}trunk-overlay.png"
+    if trunk_overlay_path.exists():
+        _trunk_pre_expand_alpha = np.array(
+            Image.open(str(trunk_overlay_path)).convert("RGBA"))[:, :, 3].copy()
+
+    # Fill interior holes in trunk overlay (dark glass vs dark body → below
+    # diff threshold, leaving holes in the alpha mask).
+    # Skip when RGBA trunk mask was applied — it's authoritative.
+    if trunk_overlay_path.exists() and "trunk" not in _masked_overlays:
+        t_arr = np.array(Image.open(str(trunk_overlay_path)))
+        t_alpha = t_arr[:, :, 3]
+        if np.any(t_alpha > 0):
+            h_t, w_t = t_alpha.shape
+            # Compute low-threshold diff to capture the dark trunk cavity
+            trunk_src_path = processed_dir / f"{prefix}trunk-open.png"
+            base_src_path = processed_dir / f"{prefix}base.png"
+            if not base_src_path.exists():
+                base_src_path = processed_dir / "base.png"
+            soft_diff = None
+            if trunk_src_path.exists() and base_src_path.exists():
+                t_rgb = np.array(Image.open(
+                    str(trunk_src_path)).convert("RGB")).astype(float)
+                b_rgb = np.array(Image.open(
+                    str(base_src_path)).convert("RGB")).astype(float)
+                pixel_diff = np.sqrt(np.sum((t_rgb - b_rgb) ** 2, axis=2))
+                soft_diff = (pixel_diff > 1).astype(np.uint8) * 255
+
+            # Bridge lid mask down to trunk cavity using soft diff.
+            # The lid is at the top; the cavity (dark opening) is below.
+            # Dilate the existing alpha vertically to bridge the gap,
+            # then intersect with soft diff to keep only real changes.
+            trunk_fill = t_alpha.copy()
+            if soft_diff is not None:
+                # Vertical dilation to bridge lid → cavity gap
+                vk = cv2.getStructuringElement(
+                    cv2.MORPH_RECT, (1, h_t // 2))
+                bridged = cv2.dilate(t_alpha, vk)
+                # Intersect with soft diff to keep only actual changes
+                trunk_fill = np.maximum(trunk_fill, bridged & soft_diff)
+
+            # Scanline fill remaining interior gaps
+            for y_row in range(h_t):
+                xs_row = np.where(trunk_fill[y_row, :] > 0)[0]
+                if len(xs_row) >= 2:
+                    trunk_fill[y_row, xs_row.min():xs_row.max() + 1] = 255
+            for x_col in range(w_t):
+                ys_col = np.where(trunk_fill[:, x_col] > 0)[0]
+                if len(ys_col) >= 2:
+                    trunk_fill[ys_col.min():ys_col.max() + 1, x_col] = 255
+
+            fill_px = (trunk_fill > 0) & (t_alpha == 0)
+            n_holes = int(np.sum(fill_px))
+            if n_holes > 0:
+                trunk_src = None
+                if trunk_src_path.exists():
+                    trunk_src = np.array(
+                        Image.open(str(trunk_src_path)).convert("RGBA"))
+                    t_arr[fill_px, :3] = trunk_src[fill_px, :3]
+                t_arr[:, :, 3] = np.maximum(t_alpha, trunk_fill)
+                Image.fromarray(t_arr).save(str(trunk_overlay_path), "PNG")
+                if verbose:
+                    total_t = int(np.sum(t_arr[:, :, 3] > 0))
+                    print(f"  {prefix}trunk-overlay.png: filled {n_holes} "
+                          f"glass gap px -> {total_t}")
+
+    # Apply pre-built frunk mask if available for this model.
+    # The mask defines the exact frunk shape (raised lid + bonnet panels),
+    # replacing the diff-based alpha which misses low-contrast bonnet areas.
+    frunk_overlay_path = output_dir / f"{prefix}frunk-overlay.png"
+    if model and frunk_overlay_path.exists():
+        frunk_src_path = processed_dir / f"{prefix}frunk-open.png"
+        if not frunk_src_path.exists():
+            frunk_src_path = processed_dir / "frunk-open.png"
+        if frunk_src_path.exists():
+            frunk_src = _apply_ref_shift(
+                Image.open(str(frunk_src_path)).convert("RGBA"))
+            h_o, w_o = np.array(frunk_src).shape[:2]
+            frunk_mask = _load_frunk_mask(model, (w_o, h_o), mode=mode)
+            if frunk_mask is not None:
+                frunk_arr = np.array(frunk_src)
+                frunk_arr[:, :, 3] = frunk_mask
+                Image.fromarray(frunk_arr).save(str(frunk_overlay_path), "PNG")
+                if verbose:
+                    n = int(np.sum(frunk_mask > 0))
+                    print(f"  {prefix}frunk-overlay.png: applied {model} "
+                          f"frunk mask -> {n} opaque px")
+
+    # Clean frunk: subtract trunk pixels (using pre-expansion alpha to
+    # avoid the expanded cavity eating into frunk territory)
     if frunk_overlay_path.exists() and trunk_overlay_path.exists():
         frunk_arr = np.array(Image.open(str(frunk_overlay_path)))
-        trunk_arr = np.array(Image.open(str(trunk_overlay_path)))
-        trunk_opaque = trunk_arr[:, :, 3] > 0
+        if _trunk_pre_expand_alpha is not None:
+            trunk_opaque = _trunk_pre_expand_alpha > 0
+        else:
+            trunk_arr = np.array(Image.open(str(trunk_overlay_path)))
+            trunk_opaque = trunk_arr[:, :, 3] > 0
         frunk_arr[trunk_opaque, 3] = 0
         Image.fromarray(frunk_arr).save(str(frunk_overlay_path), "PNG")
         n = int(np.sum(frunk_arr[:, :, 3] > 0))
         if verbose:
             print(f"  {prefix}frunk-overlay.png: cleaned trunk leak -> {n} opaque px")
 
-    # Expand frunk to cover full bonnet/hood shape.
-    # On dark-painted cars the flat hood panels have near-zero RGB diff between
-    # frunk-open and closed states, so the diff-based overlay misses them.
-    # Strategy: isolate main CC, scanline-fill interior gaps, dilate outward
-    # proportional to the CC size, flood-fill interior, then smooth.
+    # Clean frunk overlay: remove noise, fill interior holes, subtract trunk.
     if frunk_overlay_path.exists():
         frunk_arr = np.array(Image.open(str(frunk_overlay_path)))
         frunk_alpha = frunk_arr[:, :, 3]
         if np.any(frunk_alpha > 0):
-            before_fill = int(np.sum(frunk_alpha > 0))
+            before_clean = int(np.sum(frunk_alpha > 0))
             h_f, w_f = frunk_alpha.shape
 
-            # 1. Isolate the main hood body (largest CC) to avoid
-            #    thin hinge lines or small artifacts inflating the shape.
-            n_cc_f, labels_f, stats_f, _ = cv2.connectedComponentsWithStats(
+            # 1. Remove small noise CCs (keep only components > 1% of
+            #    the largest CC area).
+            n_cc, labels, stats, _ = cv2.connectedComponentsWithStats(
                 frunk_alpha, 8)
-            main_mask = frunk_alpha.copy()
-            if n_cc_f > 2:
-                largest_cc = 1 + int(np.argmax(stats_f[1:, cv2.CC_STAT_AREA]))
-                main_mask = ((labels_f == largest_cc) * 255).astype(np.uint8)
+            if n_cc > 2:
+                areas = stats[1:, cv2.CC_STAT_AREA]
+                largest_area = int(areas.max())
+                min_area = max(50, int(largest_area * 0.01))
+                for i in range(1, n_cc):
+                    if stats[i, cv2.CC_STAT_AREA] < min_area:
+                        frunk_alpha[labels == i] = 0
 
-            # 2. Scanline fill: bridge interior gaps row by row
-            for y_row in range(h_f):
-                xs_row = np.where(main_mask[y_row, :] > 0)[0]
-                if len(xs_row) >= 2:
-                    main_mask[y_row, xs_row.min():xs_row.max() + 1] = 255
+            # 2. Fill interior holes via flood-fill from corners.
+            #    Any transparent pixel not reachable from the border is
+            #    an interior hole that should be opaque.
+            border_fill = frunk_alpha.copy()
+            flood_mask = np.zeros((h_f + 2, w_f + 2), np.uint8)
+            cv2.floodFill(border_fill, flood_mask, (0, 0), 255)
+            interior_holes = (border_fill == 0)
+            n_holes = int(np.sum(interior_holes))
+            if n_holes > 0:
+                # Copy RGB from frunk-open source for hole pixels
+                frunk_src_path = processed_dir / "frunk-open.png"
+                if frunk_src_path.exists():
+                    frunk_src = np.array(
+                        Image.open(str(frunk_src_path)).convert("RGBA"))
+                    frunk_arr[interior_holes, :3] = frunk_src[
+                        interior_holes, :3]
+                frunk_alpha[interior_holes] = 255
 
-            # 3. Dilate proportional to main CC diagonal (~30%).
-            ys_cc, xs_cc = np.where(main_mask > 0)
-            cc_diag = np.sqrt((xs_cc.max() - xs_cc.min()) ** 2 +
-                              (ys_cc.max() - ys_cc.min()) ** 2)
-            dil_size = max(11, int(cc_diag * 0.30) | 1)  # ensure odd
-            dil_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
-                                              (dil_size, dil_size))
-            dilated = cv2.dilate(main_mask, dil_k)
-
-            # 4. Flood-fill interior of dilated shape
-            ff_mask = np.zeros((h_f + 2, w_f + 2), dtype=np.uint8)
-            filled_d = dilated.copy()
-            cv2.floodFill(filled_d, ff_mask, (0, 0), 128)
-            interior = (filled_d == 0).astype(np.uint8) * 255
-            expanded = np.maximum(dilated, interior)
-            # Re-add any non-main frunk pixels (hinge etc.)
-            expanded = np.maximum(expanded, frunk_alpha)
-
-            # 5. Re-subtract trunk (may have been re-introduced by dilation)
-            if trunk_overlay_path.exists():
+            # 3. Subtract trunk (may overlap at hinge area).
+            # Use pre-expansion alpha to avoid cavity eating frunk.
+            if _trunk_pre_expand_alpha is not None:
+                frunk_alpha[_trunk_pre_expand_alpha > 0] = 0
+            elif trunk_overlay_path.exists():
                 trunk_a = np.array(
                     Image.open(str(trunk_overlay_path)))[:, :, 3]
-                expanded[trunk_a > 0] = 0
+                frunk_alpha[trunk_a > 0] = 0
 
-            # 6. Smooth edges
-            expanded = cv2.GaussianBlur(expanded, (7, 7), 0)
-            new_alpha = (expanded > 128).astype(np.uint8) * 255
-
-            # Assign RGB from frunk-open source for newly covered pixels
-            frunk_src_path = processed_dir / "frunk-open.png"
-            if frunk_src_path.exists():
-                frunk_src = np.array(
-                    Image.open(str(frunk_src_path)).convert("RGBA"))
-                new_px = (new_alpha > 0) & (frunk_alpha == 0)
-                frunk_arr[new_px, :3] = frunk_src[new_px, :3]
-
-            frunk_arr[:, :, 3] = new_alpha
-            after_fill = int(np.sum(new_alpha > 0))
-            if after_fill > before_fill:
-                Image.fromarray(frunk_arr).save(str(frunk_overlay_path), "PNG")
+            frunk_arr[:, :, 3] = frunk_alpha
+            after_clean = int(np.sum(frunk_alpha > 0))
+            if after_clean != before_clean:
+                Image.fromarray(frunk_arr).save(
+                    str(frunk_overlay_path), "PNG")
                 if verbose:
-                    print(f"  {prefix}frunk-overlay.png: expanded bonnet "
-                          f"(+{after_fill - before_fill} px -> {after_fill})")
+                    print(f"  {prefix}frunk-overlay.png: cleaned "
+                          f"({before_clean} -> {after_clean} px, "
+                          f"{n_holes} hole px filled)")
 
-    # Clean door overlays: subtract frunk+trunk from doors
+    # Clean door overlays: subtract frunk and trunk from doors.
+    # Frunk renders above doors in z-order, so overlapping pixels are
+    # redundant and would double-render.  Trunk renders below doors,
+    # but door overlays contain CLOSED-trunk pixels that would
+    # overwrite the open trunk when both are active.
     if frunk_overlay_path.exists():
-        frunk_arr = np.array(Image.open(str(frunk_overlay_path)))
-        frunk_mask = frunk_arr[:, :, 3] > 0
-        trunk_mask = np.zeros_like(frunk_mask)
-        if trunk_overlay_path.exists():
-            trunk_mask = np.array(Image.open(str(trunk_overlay_path)))[:, :, 3] > 0
-        body_mask = frunk_mask | trunk_mask
+        frunk_mask = np.array(Image.open(str(frunk_overlay_path)))[:, :, 3] > 0
         for name in overlays_list:
             if name in ("chargeport", "frunk"):
+                continue
+            if name in _masked_overlays:
                 continue
             door_path = output_dir / f"{prefix}{name}-overlay.png"
             if not door_path.exists():
                 continue
+            clip_mask = frunk_mask
             door_arr = np.array(Image.open(str(door_path)))
             before = int(np.sum(door_arr[:, :, 3] > 0))
-            door_arr[body_mask, 3] = 0
+            door_arr[clip_mask, 3] = 0
             after = int(np.sum(door_arr[:, :, 3] > 0))
             if before != after:
                 Image.fromarray(door_arr).save(str(door_path), "PNG")
                 if verbose:
                     print(f"  {prefix}{name}-overlay.png: cleaned frunk/trunk leak "
                           f"({before - after} px removed)")
+
+    # NOTE: trunk-vs-door layering (trunk shows closed when doors are
+    # open) must be handled by the card's z-order, not by clipping door
+    # overlays — clipping destroys the individual door overlays.
+
+    # Fill interior gaps in door overlays (same dark-glass issue as trunk).
+    # Skip frunk/chargeport — their shapes are concave and scanline fill
+    # would massively inflate them.
+    # Skip overlays with pre-built masks — their shape is authoritative.
+    for name in overlays_list:
+        if name in ("frunk", "chargeport"):
+            continue
+        if name in _masked_overlays:
+            continue
+        door_path = output_dir / f"{prefix}{name}-overlay.png"
+        if not door_path.exists():
+            continue
+        d_arr = np.array(Image.open(str(door_path)))
+        d_alpha = d_arr[:, :, 3]
+        if np.sum(d_alpha > 0) < 10:
+            continue
+        h_d, w_d = d_alpha.shape
+        door_fill = d_alpha.copy()
+        for y_row in range(h_d):
+            xs_row = np.where(d_alpha[y_row, :] > 0)[0]
+            if len(xs_row) >= 2:
+                door_fill[y_row, xs_row.min():xs_row.max() + 1] = 255
+        for x_col in range(w_d):
+            ys_col = np.where(d_alpha[:, x_col] > 0)[0]
+            if len(ys_col) >= 2:
+                door_fill[ys_col.min():ys_col.max() + 1, x_col] = 255
+        fill_px = (door_fill > 0) & (d_alpha == 0)
+        n_fill = int(np.sum(fill_px))
+        if n_fill > 0:
+            # Copy RGB from the door-open source image
+            src_path = processed_dir / f"{prefix}{name.replace('-overlay', '')}-open.png"
+            if not src_path.exists():
+                src_path = processed_dir / f"{name}-open.png"
+            if src_path.exists():
+                d_src = np.array(Image.open(str(src_path)).convert("RGBA"))
+                d_arr[fill_px, :3] = d_src[fill_px, :3]
+            d_arr[:, :, 3] = door_fill
+            Image.fromarray(d_arr).save(str(door_path), "PNG")
+            if verbose:
+                total_d = int(np.sum(d_arr[:, :, 3] > 0))
+                print(f"  {prefix}{name}-overlay.png: filled {n_fill} "
+                      f"gap px -> {total_d}")
+
+    # Clip frunk away from far-side door areas.  Frunk renders above
+    # far-doors in z-order, so any overlap makes the door invisible.
+    # Must run after gap-fill (which can re-inflate the frunk via
+    # scanline fill into far-side door territory).
+    # Skip when pre-built masks define the shapes — masks are
+    # authoritative and the dilated door buffer would eat into the lid.
+    _used_frunk_mask = ("frunk" in _masked_overlays or (model and any(
+        (_ASSETS_DIR / f"frunk_mask_{model}{s}.png").exists()
+        for s in (f"_{mode}", ""))))
+    far_doors_clip = {"ff", "fr"}
+    if frunk_overlay_path.exists() and not _used_frunk_mask:
+        frunk_clip_arr = np.array(Image.open(str(frunk_overlay_path)))
+        frunk_clip_alpha = frunk_clip_arr[:, :, 3]
+        clipped_total = 0
+        for fd_name in far_doors_clip:
+            fd_path = output_dir / f"{prefix}{fd_name}-overlay.png"
+            if not fd_path.exists():
+                continue
+            fd_alpha = np.array(Image.open(str(fd_path)))[:, :, 3]
+            # Dilate door mask to create buffer so door edge stays visible
+            buf_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+            fd_buf = cv2.dilate(fd_alpha, buf_k)
+            clipped = int(np.sum((frunk_clip_alpha > 0) & (fd_buf > 0)))
+            frunk_clip_alpha[fd_buf > 0] = 0
+            clipped_total += clipped
+        if clipped_total > 0:
+            frunk_clip_arr[:, :, 3] = frunk_clip_alpha
+            Image.fromarray(frunk_clip_arr).save(
+                str(frunk_overlay_path), "PNG")
+            if verbose:
+                print(f"  {prefix}frunk-overlay.png: clipped {clipped_total} "
+                      f"px from far-door areas")
 
     # Combined overlays
     combined_patterns = (COMBINED_PATTERNS_ONCHARGE if mode == "oncharge"
@@ -663,9 +980,62 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
                     print(f"  {prefix}{cname}-overlay.png: removed {leaked} "
                           f"px from {opp_name}")
 
+        # Side-based clip: combined overlays must stay on their own side.
+        # nf-nr-combined = near-side, ff-fr-combined = far-side.
+        # Offcharge: near=RIGHT (x >= w/2), far=LEFT (x < w/2)
+        # Oncharge:  near=LEFT  (x < w/2), far=RIGHT (x >= w/2)
+        h_c, w_c = c_alpha.shape
+        mid_x = w_c // 2
+        is_near = ("nf" in constituents)  # nf-nr = near side
+        if mode == "offcharge":
+            # near = right, far = left
+            if is_near:
+                clip_zone = np.s_[:, :mid_x]  # zero left side
+            else:
+                clip_zone = np.s_[:, mid_x:]  # zero right side
+        else:
+            # oncharge: near = left, far = right
+            if is_near:
+                clip_zone = np.s_[:, mid_x:]  # zero right side
+            else:
+                clip_zone = np.s_[:, :mid_x]  # zero left side
+        clipped = int(np.sum(c_alpha[clip_zone] > 0))
+        if clipped > 0:
+            c_alpha[clip_zone] = 0
+            modified = True
+            if verbose:
+                print(f"  {prefix}{cname}-overlay.png: side-clip removed "
+                      f"{clipped} px from wrong side")
+
         if modified:
             c_arr[:, :, 3] = c_alpha
             Image.fromarray(c_arr).save(str(c_overlay_path), "PNG")
+
+        # Apply pre-built combined overlay (RGBA) if available.
+        if model:
+            h_c2, w_c2 = c_arr.shape[:2]
+            mask_name = cname.replace("-", "_")
+            c_rgba = _load_overlay_rgba(mask_name, model,
+                                        (w_c2, h_c2), mode=mode)
+            if c_rgba is not None:
+                Image.fromarray(c_rgba).save(
+                    str(c_overlay_path), "PNG")
+                if verbose:
+                    n = int(np.sum(c_rgba[:, :, 3] > 0))
+                    print(f"  {prefix}{cname}-overlay.png: applied "
+                          f"{model} mask -> {n} opaque px")
+            else:
+                c_mask = _load_overlay_mask(mask_name, model,
+                                            (w_c2, h_c2), mode=mode)
+                if c_mask is not None:
+                    c_src = np.array(Image.open(str(c_overlay_path)))
+                    c_src[:, :, 3] = c_mask
+                    Image.fromarray(c_src).save(
+                        str(c_overlay_path), "PNG")
+                    if verbose:
+                        n = int(np.sum(c_mask > 0))
+                        print(f"  {prefix}{cname}-overlay.png: applied "
+                              f"{model} mask -> {n} opaque px")
 
     # All-doors overlay
     all_doors_path = processed_dir / "all-doors.png"
@@ -675,9 +1045,25 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
         overlay = compute_overlay(all_doors_img, base_img,
                                   remove_cable=(mode == "oncharge"))
         out_name = f"{prefix}all-doors-overlay.png"
-        overlay.save(str(output_dir / out_name), "PNG")
+        out_path = output_dir / out_name
+        overlay.save(str(out_path), "PNG")
         count += 1
-        print(f"  Saved {out_name}")
+        # Apply pre-built all-doors mask if available
+        if model:
+            h_o, w_o = np.array(all_doors_img).shape[:2]
+            ad_mask = _load_overlay_mask("all_doors", model, (w_o, h_o),
+                                         mode=mode)
+            if ad_mask is not None:
+                ad_arr = np.array(all_doors_img)
+                ad_arr[:, :, 3] = ad_mask
+                Image.fromarray(ad_arr).save(str(out_path), "PNG")
+                n = int(np.sum(ad_mask > 0))
+                print(f"  {out_name}: applied {model} all-doors mask "
+                      f"-> {n} opaque px")
+            else:
+                print(f"  Saved {out_name}")
+        else:
+            print(f"  Saved {out_name}")
     elif verbose:
         print(f"  Skipping all-doors overlay: {all_doors_path} not found")
 

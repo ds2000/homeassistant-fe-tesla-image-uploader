@@ -298,7 +298,7 @@
     };
 
     // Z-order constants (DOM order = paint order, later = on top)
-    var Z_ORDER_OFFCHARGE = ['chargeport', 'frunk', 'fr', 'ff', 'nr', 'nf'];
+    var Z_ORDER_OFFCHARGE = ['chargeport', 'fr', 'ff', 'frunk', 'nr', 'nf'];
     var BELOW_TRUNK_ONCHARGE = ['fr', 'ff'];
     var Z_ORDER_ONCHARGE = ['frunk', 'nf', 'nr'];
 
@@ -1207,6 +1207,152 @@
         openPreview();
     });
 
+    // ── Mask gallery ──────────────────────────────────────────────────
+
+    var $btnShowMasks = document.getElementById('btn-show-masks');
+    var $maskGallery = document.getElementById('mask-gallery');
+    var maskGalleryVisible = false;
+
+    var MASK_OVERLAYS = [
+        { file: 'base.png', label: 'Base' },
+        { file: 'trunk-overlay.png', label: 'Trunk' },
+        { file: 'chargeport-overlay.png', label: 'Chargeport', offchargeOnly: true },
+        { file: 'frunk-overlay.png', label: 'Frunk' },
+        { file: 'nf-overlay.png', label: 'Near-front (NF)' },
+        { file: 'nr-overlay.png', label: 'Near-rear (NR)' },
+        { file: 'ff-overlay.png', label: 'Far-front (FF)' },
+        { file: 'fr-overlay.png', label: 'Far-rear (FR)' },
+        { file: 'nf-nr-combined-overlay.png', label: 'NF+NR Combined' },
+        { file: 'ff-fr-combined-overlay.png', label: 'FF+FR Combined' },
+        { file: 'all-doors-overlay.png', label: 'All Doors' },
+    ];
+
+    $btnShowMasks.addEventListener('click', function () {
+        maskGalleryVisible = !maskGalleryVisible;
+        $btnShowMasks.classList.toggle('active', maskGalleryVisible);
+        $maskGallery.hidden = !maskGalleryVisible;
+        if (maskGalleryVisible) renderMaskGallery();
+    });
+
+    function renderMaskGallery() {
+        var prefix = previewMode === 'oncharge' ? 'oncharge-' : '';
+        var html = '<div class="mask-gallery">';
+        MASK_OVERLAYS.forEach(function (def) {
+            if (def.offchargeOnly && previewMode === 'oncharge') return;
+            var url = previewImageUrl(prefix + def.file);
+            html += '<div class="mask-card">' +
+                '<img src="' + url + '" alt="' + def.label + '" onerror="this.parentNode.style.display=\'none\'">' +
+                '<div class="mask-label">' + def.label + '</div>' +
+                '</div>';
+        });
+        html += '</div>';
+        $maskGallery.innerHTML = html;
+    }
+
+    // ── Source images gallery ─────────────────────────────────────────
+
+    var $btnShowSources = document.getElementById('btn-show-sources');
+    var $sourceGallery = document.getElementById('source-gallery');
+    var sourceGalleryVisible = false;
+
+    var SOURCE_FILES_OFFCHARGE = [
+        { file: 'closed.png', label: 'All Closed (base)' },
+        { file: 'cp.png', label: 'Charge Port' },
+        { file: 'cp_ft.png', label: 'Frunk + Trunk' },
+        { file: 'rt.png', label: 'Trunk Open' },
+        { file: 'front_doors.png', label: 'Front Doors' },
+        { file: 'rear_doors.png', label: 'Rear Doors' },
+        { file: 'all_doors.png', label: 'All Doors' },
+        { file: 'top_controls.png', label: 'Controls Panel' },
+        { file: 'top_climate.png', label: 'Climate Panel' },
+    ];
+
+    var SOURCE_FILES_ONCHARGE = [
+        { file: 'oc_closed.png', label: 'On-charge Closed (base)' },
+        { file: 'oc_cp_ft.png', label: 'On-charge Frunk + Trunk' },
+        { file: 'oc_rt.png', label: 'On-charge Trunk' },
+        { file: 'oc_front_doors.png', label: 'On-charge Front Doors' },
+        { file: 'oc_rear_doors.png', label: 'On-charge Rear Doors' },
+        { file: 'oc_all_doors.png', label: 'On-charge All Doors' },
+    ];
+
+    $btnShowSources.addEventListener('click', function () {
+        sourceGalleryVisible = !sourceGalleryVisible;
+        $btnShowSources.classList.toggle('active', sourceGalleryVisible);
+        $sourceGallery.hidden = !sourceGalleryVisible;
+        if (sourceGalleryVisible) renderSourceGallery();
+    });
+
+    function sourceImageUrl(filename) {
+        var url = '/' + lastSubmissionDir + '/' + filename;
+        if (reviewRef) url += '?ref=' + encodeURIComponent(reviewRef);
+        return url;
+    }
+
+    function renderSourceGallery() {
+        var files = previewMode === 'oncharge' ? SOURCE_FILES_ONCHARGE : SOURCE_FILES_OFFCHARGE;
+        var html = '<div class="mask-gallery">';
+        files.forEach(function (def) {
+            var url = sourceImageUrl(def.file);
+            html += '<div class="mask-card">' +
+                '<img src="' + url + '" alt="' + def.label + '" onerror="this.parentNode.style.display=\'none\'">' +
+                '<div class="mask-label">' + def.label + '</div>' +
+                '</div>';
+        });
+        html += '</div>';
+        $sourceGallery.innerHTML = html;
+    }
+
+    // ── Processed intermediates gallery ───────────────────────────────
+
+    var $btnShowProcessed = document.getElementById('btn-show-processed');
+    var $processedGallery = document.getElementById('processed-gallery');
+    var processedGalleryVisible = false;
+
+    var PROCESSED_FILES = [
+        'base.png', 'chargeport-open.png', 'frunk-open.png', 'trunk-open.png',
+        'nf-open.png', 'nr-open.png', 'ff-open.png', 'fr-open.png',
+        'front-doors.png', 'rear-doors.png', 'all-doors.png',
+        'nf-nr-combined.png', 'ff-fr-combined.png',
+    ];
+
+    $btnShowProcessed.addEventListener('click', function () {
+        processedGalleryVisible = !processedGalleryVisible;
+        $btnShowProcessed.classList.toggle('active', processedGalleryVisible);
+        $processedGallery.hidden = !processedGalleryVisible;
+        if (processedGalleryVisible) renderProcessedGallery();
+    });
+
+    function processedImageUrl(filename) {
+        var modeDir = previewMode === 'oncharge' ? 'oncharge' : 'offcharge';
+        var url = '/' + lastSubmissionDir + '/processed/' + modeDir + '/' + filename;
+        if (reviewRef) url += '?ref=' + encodeURIComponent(reviewRef);
+        return url;
+    }
+
+    function renderProcessedGallery() {
+        var html = '<div class="mask-gallery">';
+        PROCESSED_FILES.forEach(function (file) {
+            var url = processedImageUrl(file);
+            var label = file.replace('.png', '').replace(/-/g, ' ');
+            html += '<div class="mask-card">' +
+                '<img src="' + url + '" alt="' + label + '" onerror="this.parentNode.style.display=\'none\'">' +
+                '<div class="mask-label">' + label + '</div>' +
+                '</div>';
+        });
+        html += '</div>';
+        $processedGallery.innerHTML = html;
+    }
+
+    // Re-render galleries when mode changes
+    var _origUpdateModeToggle = updateModeToggle;
+    updateModeToggle = function () {
+        _origUpdateModeToggle();
+        if (maskGalleryVisible) renderMaskGallery();
+        if (sourceGalleryVisible) renderSourceGallery();
+        if (processedGalleryVisible) renderProcessedGallery();
+    };
+
     // ── Branch review ──────────────────────────────────────────────────
 
     var branchList = [];
@@ -1235,7 +1381,8 @@
                     branchList.forEach(function (b) {
                         var opt = document.createElement('option');
                         opt.value = b.name;
-                        opt.textContent = b.label;
+                        opt.textContent = b.label + (b.has_processed ? '' : ' (not processed)');
+                        if (!b.has_processed) opt.disabled = true;
                         $selectBranch.appendChild(opt);
                     });
                 }
@@ -1272,7 +1419,7 @@
         selection.model = branch.model;
         selection.variant = branch.variant;
         selection.colour = branch.colour;
-        lastSubmissionDir = 'submissions/' + branch.model + '-' + branch.variant + '-' + branch.colour;
+        lastSubmissionDir = branch.name;
         // Only set reviewRef for git branches, not local dirs
         reviewRef = branch.source === 'local' ? null : branch.source;
 
