@@ -830,6 +830,8 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
         for name in overlays_list:
             if name in ("chargeport", "frunk"):
                 continue
+            if name in _masked_overlays:
+                continue
             door_path = output_dir / f"{prefix}{name}-overlay.png"
             if not door_path.exists():
                 continue
