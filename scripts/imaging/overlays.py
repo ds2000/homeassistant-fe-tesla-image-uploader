@@ -510,9 +510,19 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
     if mode == "oncharge":
         base_arr = np.array(base_img)
         rgb_f = base_arr[:, :, :3].astype(np.float64)
-        cable_mask = ((rgb_f[:, :, 1] > 80) &
-                      (rgb_f[:, :, 1] > rgb_f[:, :, 0] + 30) &
-                      (rgb_f[:, :, 1] > rgb_f[:, :, 2] + 15))
+        r, g, b = rgb_f[:, :, 0], rgb_f[:, :, 1], rgb_f[:, :, 2]
+        brightness = (r + g + b) / 3
+        # Detect green cables (G dominant) OR blue/cyan cables (B dominant,
+        # bright, low red — only in bottom 40% to avoid catching car body)
+        green_cable = (g > 80) & (g > r + 30) & (g > b + 15)
+        h_base = base_arr.shape[0]
+        blue_cable = np.zeros_like(green_cable)
+        y_cutoff = int(h_base * 0.6)
+        blue_cable[y_cutoff:] = ((b[y_cutoff:] > 130) &
+                                 (g[y_cutoff:] > 70) &
+                                 (r[y_cutoff:] < 80) &
+                                 (brightness[y_cutoff:] > 80))
+        cable_mask = green_cable | blue_cable
         if np.any(cable_mask):
             cable_rgba = np.zeros_like(base_arr)
             cable_rgba[cable_mask] = base_arr[cable_mask]
