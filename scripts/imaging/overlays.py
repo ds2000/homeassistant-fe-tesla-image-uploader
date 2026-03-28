@@ -510,35 +510,54 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
     if mode == "oncharge":
         base_arr = np.array(base_img)
         rgb_f = base_arr[:, :, :3].astype(np.float64)
+        h_base, w_base = base_arr.shape[:2]
+        bg_color = base_arr[0, 0, :3].astype(np.float64)
+        pixel_diff = np.sqrt(np.sum(
+            (rgb_f[:, :, :3] - bg_color) ** 2, axis=2))
+        non_bg = pixel_diff > 6
         r, g, b = rgb_f[:, :, 0], rgb_f[:, :, 1], rgb_f[:, :, 2]
-        brightness = (r + g + b) / 3
-        # Detect green cables (G dominant) OR blue/cyan cables (B dominant,
-        # bright, low red — only in bottom 40% to avoid catching car body)
+
+        # Detect green cables (G dominant)
         green_cable = (g > 80) & (g > r + 30) & (g > b + 15)
-        h_base = base_arr.shape[0]
-        blue_cable = np.zeros_like(green_cable)
-        y_cutoff = int(h_base * 0.6)
-        blue_cable[y_cutoff:] = ((b[y_cutoff:] > 130) &
-                                 (g[y_cutoff:] > 70) &
-                                 (r[y_cutoff:] < 80) &
-                                 (brightness[y_cutoff:] > 80))
+
+        # Detect blue/cyan cables: scan rows in the bottom half for
+        # thin (2-25px) non-bg features with blue tint (not car body).
+        blue_cable = np.zeros((h_base, w_base), dtype=bool)
+        y_start = int(h_base * 0.5)
+        for y_row in range(y_start, h_base):
+            xs = np.where(non_bg[y_row])[0]
+            if len(xs) == 0:
+                continue
+            groups = np.split(xs, np.where(np.diff(xs) > 3)[0] + 1)
+            for grp in groups:
+                if not (2 <= len(grp) <= 25):
+                    continue
+                avg = rgb_f[y_row, grp].mean(axis=0)
+                if avg[2] > avg[0] + 8:  # blue-ish
+                    blue_cable[y_row, grp] = True
+
         cable_mask = green_cable | blue_cable
+        # Dilate to cover anti-aliased edges, intersect with non-bg
         if np.any(cable_mask):
+            cable_u8 = cable_mask.astype(np.uint8) * 255
+            dk = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            cable_u8 = cv2.dilate(cable_u8, dk)
+            cable_mask = (cable_u8 > 0) & non_bg
+
+        if np.any(cable_mask):
+            # Always render cable as charging green
             cable_rgba = np.zeros_like(base_arr)
-            cable_rgba[cable_mask] = base_arr[cable_mask]
-            # Recolour non-green cables to charging green so the
-            # pulsing glow animation looks correct (blue = plugged in,
-            # green = actively charging).
-            blue_px = cable_mask & (b > g)
-            if np.any(blue_px):
-                px = cable_rgba[blue_px, :3].astype(np.float64)
-                brt = px.mean(axis=1)
-                max_brt = brt.max() if brt.max() > 0 else 1.0
-                scale = brt / max_brt  # 0..1 relative brightness
-                # Map to charging green matching Model 3 cable
-                cable_rgba[blue_px, 0] = np.clip(81 * scale, 0, 255).astype(np.uint8)
-                cable_rgba[blue_px, 1] = np.clip(169 * scale, 0, 255).astype(np.uint8)
-                cable_rgba[blue_px, 2] = np.clip(135 * scale, 0, 255).astype(np.uint8)
+            cable_rgba[cable_mask, 3] = 255
+            px_brt = rgb_f[cable_mask].mean(axis=1)
+            max_brt = max(px_brt.max(), 1.0)
+            # Boost dim cable pixels — minimum 0.5 brightness
+            scale = 0.5 + 0.5 * (px_brt / max_brt)
+            cable_rgba[cable_mask, 0] = np.clip(
+                81 * scale, 0, 255).astype(np.uint8)
+            cable_rgba[cable_mask, 1] = np.clip(
+                169 * scale, 0, 255).astype(np.uint8)
+            cable_rgba[cable_mask, 2] = np.clip(
+                135 * scale, 0, 255).astype(np.uint8)
             cable_img = Image.fromarray(cable_rgba)
             cable_img.save(str(output_dir / "oncharge-cable-overlay.png"), "PNG")
             print(f"  Saved oncharge-cable-overlay.png")
