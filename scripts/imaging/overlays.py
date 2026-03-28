@@ -526,6 +526,19 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
         if np.any(cable_mask):
             cable_rgba = np.zeros_like(base_arr)
             cable_rgba[cable_mask] = base_arr[cable_mask]
+            # Recolour non-green cables to charging green so the
+            # pulsing glow animation looks correct (blue = plugged in,
+            # green = actively charging).
+            blue_px = cable_mask & (b > g)
+            if np.any(blue_px):
+                px = cable_rgba[blue_px, :3].astype(np.float64)
+                brt = px.mean(axis=1)
+                max_brt = brt.max() if brt.max() > 0 else 1.0
+                scale = brt / max_brt  # 0..1 relative brightness
+                # Map to charging green matching Model 3 cable
+                cable_rgba[blue_px, 0] = np.clip(81 * scale, 0, 255).astype(np.uint8)
+                cable_rgba[blue_px, 1] = np.clip(169 * scale, 0, 255).astype(np.uint8)
+                cable_rgba[blue_px, 2] = np.clip(135 * scale, 0, 255).astype(np.uint8)
             cable_img = Image.fromarray(cable_rgba)
             cable_img.save(str(output_dir / "oncharge-cable-overlay.png"), "PNG")
             print(f"  Saved oncharge-cable-overlay.png")
