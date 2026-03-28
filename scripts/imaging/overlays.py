@@ -506,73 +506,30 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
         trunk_overlay.save(str(output_dir / trunk_overlay_out), "PNG")
         print(f"  Saved {trunk_out} + {trunk_overlay_out}")
 
-    # Cable overlay for oncharge
+    # Cable overlay for oncharge.
+    # Try pre-built RGBA mask first; fall back to green cable detection.
     if mode == "oncharge":
         base_arr = np.array(base_img)
-        rgb_f = base_arr[:, :, :3].astype(np.float64)
-        h_base, w_base = base_arr.shape[:2]
-        bg_color = base_arr[0, 0, :3].astype(np.float64)
-        pixel_diff = np.sqrt(np.sum(
-            (rgb_f[:, :, :3] - bg_color) ** 2, axis=2))
-        non_bg = pixel_diff > 6
-        r, g, b = rgb_f[:, :, 0], rgb_f[:, :, 1], rgb_f[:, :, 2]
-
-        # Detect green cables (G dominant)
-        green_cable = (g > 80) & (g > r + 30) & (g > b + 15)
-
-        # Detect blue/cyan cables in the bottom half:
-        # 1) Thin features on dark background (cable below car)
-        blue_thin = np.zeros((h_base, w_base), dtype=bool)
-        y_start = int(h_base * 0.5)
-        for y_row in range(y_start, h_base):
-            xs = np.where(non_bg[y_row])[0]
-            if len(xs) == 0:
-                continue
-            groups = np.split(xs, np.where(np.diff(xs) > 3)[0] + 1)
-            for grp in groups:
-                if 2 <= len(grp) <= 25:
-                    avg = rgb_f[y_row, grp].mean(axis=0)
-                    if avg[2] > avg[0] + 8:
-                        blue_thin[y_row, grp] = True
-        # 2) Bright blue cable ON blue body (B>130 vs body B<120)
-        blue_on_body = np.zeros((h_base, w_base), dtype=bool)
-        blue_on_body[y_start:] = (b[y_start:] > 130) & non_bg[y_start:]
-
-        cable_mask = green_cable | blue_thin | blue_on_body
-        # Connect fragments, keep only largest CC (the cable)
-        if np.any(cable_mask):
-            cable_u8 = cable_mask.astype(np.uint8) * 255
-            close_k = cv2.getStructuringElement(
-                cv2.MORPH_ELLIPSE, (11, 11))
-            cable_u8 = cv2.morphologyEx(
-                cable_u8, cv2.MORPH_CLOSE, close_k)
-            dk = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-            cable_u8 = cv2.dilate(cable_u8, dk)
-            cable_mask = (cable_u8 > 0) & non_bg
-            n_cc_c, labels_c, stats_c, _ = \
-                cv2.connectedComponentsWithStats(
-                    cable_mask.astype(np.uint8) * 255, 8)
-            if n_cc_c > 2:
-                areas_c = [stats_c[i, cv2.CC_STAT_AREA]
-                           for i in range(1, n_cc_c)]
-                largest_c = int(np.argmax(areas_c)) + 1
-                cable_mask = labels_c == largest_c
-
-        if np.any(cable_mask):
-            # Always render cable as charging green
-            cable_rgba = np.zeros_like(base_arr)
-            cable_rgba[cable_mask, 3] = 255
-            px_brt = rgb_f[cable_mask].mean(axis=1)
-            max_brt = max(px_brt.max(), 1.0)
-            # Boost dim cable pixels — minimum 0.5 brightness
-            scale = 0.5 + 0.5 * (px_brt / max_brt)
-            cable_rgba[cable_mask, 0] = np.clip(
-                81 * scale, 0, 255).astype(np.uint8)
-            cable_rgba[cable_mask, 1] = np.clip(
-                169 * scale, 0, 255).astype(np.uint8)
-            cable_rgba[cable_mask, 2] = np.clip(
-                135 * scale, 0, 255).astype(np.uint8)
-            cable_img = Image.fromarray(cable_rgba)
+        cable_saved = False
+        if model:
+            base_sz = (base_arr.shape[1], base_arr.shape[0])
+            cable_rgba = _load_overlay_rgba("cable", model, base_sz,
+                                            mode=mode)
+            if cable_rgba is not None:
+                Image.fromarray(cable_rgba).save(
+                    str(output_dir / "oncharge-cable-overlay.png"), "PNG")
+                print(f"  Saved oncharge-cable-overlay.png (from mask)")
+                cable_saved = True
+        if not cable_saved:
+            rgb_f = base_arr[:, :, :3].astype(np.float64)
+            g = rgb_f[:, :, 1]
+            r = rgb_f[:, :, 0]
+            b = rgb_f[:, :, 2]
+            cable_mask = ((g > 80) & (g > r + 30) & (g > b + 15))
+            if np.any(cable_mask):
+                cable_rgba = np.zeros_like(base_arr)
+                cable_rgba[cable_mask] = base_arr[cable_mask]
+                cable_img = Image.fromarray(cable_rgba)
             cable_img.save(str(output_dir / "oncharge-cable-overlay.png"), "PNG")
             print(f"  Saved oncharge-cable-overlay.png")
 
