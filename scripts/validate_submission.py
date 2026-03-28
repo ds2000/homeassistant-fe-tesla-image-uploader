@@ -267,8 +267,10 @@ def validate_submission(submission_dir):
                 }
             )
 
-    if len(climate_warnings) >= CLIMATE_ACTIVE_MIN_FLAGS:
-        all_pass = False
+    # Climate-active is now a warning, not a blocker.
+    # The pipeline handles climate artifacts via inpainting.
+    # if len(climate_warnings) >= CLIMATE_ACTIVE_MIN_FLAGS:
+    #     all_pass = False
 
     return {
         "submission_dir": submission_dir,

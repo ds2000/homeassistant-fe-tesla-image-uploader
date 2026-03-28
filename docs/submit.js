@@ -1233,12 +1233,12 @@ var PUBLIC_HMAC_SALT = 'tesla-card-uploader-hmac-v1';
             }
         });
 
-        // Climate-active detection — hard block, cannot bypass
+        // Climate-active detection — warning only (no longer blocks upload)
         keys.forEach(function (key) {
             if (!uploadClimateFlags[key]) return;
             var layer = LAYERS.filter(function (l) { return l.key === key; })[0];
             var section = layer && layer.section ? ' (' + layer.section + ')' : '';
-            issues.push({ key: key, label: (layer ? layer.label : key) + section, issue: 'climate control appears to be ON — white air flow graphics visible behind windscreen. Turn climate OFF and retake.', blocking: true });
+            issues.push({ key: key, label: (layer ? layer.label : key) + section, issue: 'climate control may be ON — white air flow graphics visible behind windscreen. Consider turning climate OFF and retaking.', blocking: false });
         });
 
         // Duplicate detection via file size (quick heuristic)
