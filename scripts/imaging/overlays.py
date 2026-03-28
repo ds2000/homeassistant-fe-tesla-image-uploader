@@ -520,9 +520,9 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
         # Detect green cables (G dominant)
         green_cable = (g > 80) & (g > r + 30) & (g > b + 15)
 
-        # Detect blue/cyan cables: scan rows in the bottom half for
-        # thin (2-25px) non-bg features with blue tint (not car body).
-        blue_cable = np.zeros((h_base, w_base), dtype=bool)
+        # Detect blue/cyan cables in the bottom half:
+        # 1) Thin features on dark background (cable below car)
+        blue_thin = np.zeros((h_base, w_base), dtype=bool)
         y_start = int(h_base * 0.5)
         for y_row in range(y_start, h_base):
             xs = np.where(non_bg[y_row])[0]
@@ -530,19 +530,33 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
                 continue
             groups = np.split(xs, np.where(np.diff(xs) > 3)[0] + 1)
             for grp in groups:
-                if not (2 <= len(grp) <= 25):
-                    continue
-                avg = rgb_f[y_row, grp].mean(axis=0)
-                if avg[2] > avg[0] + 8:  # blue-ish
-                    blue_cable[y_row, grp] = True
+                if 2 <= len(grp) <= 25:
+                    avg = rgb_f[y_row, grp].mean(axis=0)
+                    if avg[2] > avg[0] + 8:
+                        blue_thin[y_row, grp] = True
+        # 2) Bright blue cable ON blue body (B>130 vs body B<120)
+        blue_on_body = np.zeros((h_base, w_base), dtype=bool)
+        blue_on_body[y_start:] = (b[y_start:] > 130) & non_bg[y_start:]
 
-        cable_mask = green_cable | blue_cable
-        # Dilate to cover anti-aliased edges, intersect with non-bg
+        cable_mask = green_cable | blue_thin | blue_on_body
+        # Connect fragments, keep only largest CC (the cable)
         if np.any(cable_mask):
             cable_u8 = cable_mask.astype(np.uint8) * 255
-            dk = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            close_k = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (11, 11))
+            cable_u8 = cv2.morphologyEx(
+                cable_u8, cv2.MORPH_CLOSE, close_k)
+            dk = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
             cable_u8 = cv2.dilate(cable_u8, dk)
             cable_mask = (cable_u8 > 0) & non_bg
+            n_cc_c, labels_c, stats_c, _ = \
+                cv2.connectedComponentsWithStats(
+                    cable_mask.astype(np.uint8) * 255, 8)
+            if n_cc_c > 2:
+                areas_c = [stats_c[i, cv2.CC_STAT_AREA]
+                           for i in range(1, n_cc_c)]
+                largest_c = int(np.argmax(areas_c)) + 1
+                cable_mask = labels_c == largest_c
 
         if np.any(cable_mask):
             # Always render cable as charging green
