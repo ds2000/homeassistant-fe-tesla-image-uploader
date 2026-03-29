@@ -530,8 +530,9 @@ def generate_overlays(processed_dir, output_dir, mode="offcharge",
                 cable_rgba = np.zeros_like(base_arr)
                 cable_rgba[cable_mask] = base_arr[cable_mask]
                 cable_img = Image.fromarray(cable_rgba)
-            cable_img.save(str(output_dir / "oncharge-cable-overlay.png"), "PNG")
-            print(f"  Saved oncharge-cable-overlay.png")
+                cable_img.save(
+                    str(output_dir / "oncharge-cable-overlay.png"), "PNG")
+                print(f"  Saved oncharge-cable-overlay.png")
 
     overlays_list = (ONCHARGE_OVERLAYS if mode == "oncharge"
                      else OFFCHARGE_OVERLAYS)
