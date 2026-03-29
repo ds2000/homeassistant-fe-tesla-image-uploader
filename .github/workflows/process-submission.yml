@@ -135,6 +135,7 @@ jobs:
         env:
           SUBMISSION_DIR: ${{ steps.detect.outputs.submission_dir }}
           MODEL: ${{ steps.detect.outputs.model }}
+          VARIANT: ${{ steps.detect.outputs.variant }}
           HAS_REF: ${{ steps.reference.outputs.has_reference }}
         run: |
           REF_ARGS=""
@@ -146,7 +147,7 @@ jobs:
             --output-dir processed/offcharge/ \
             --mode offcharge \
             --generate-overlays \
-            --model "$MODEL" \
+            --model "${MODEL}.${VARIANT}" \
             --verbose \
             $REF_ARGS
 
@@ -155,6 +156,7 @@ jobs:
         env:
           SUBMISSION_DIR: ${{ steps.detect.outputs.submission_dir }}
           MODEL: ${{ steps.detect.outputs.model }}
+          VARIANT: ${{ steps.detect.outputs.variant }}
           HAS_REF: ${{ steps.reference.outputs.has_reference }}
         run: |
           REF_ARGS=""
@@ -166,7 +168,7 @@ jobs:
             --output-dir processed/oncharge/ \
             --mode oncharge \
             --generate-overlays \
-            --model "$MODEL" \
+            --model "${MODEL}.${VARIANT}" \
             --verbose \
             $REF_ARGS
 
