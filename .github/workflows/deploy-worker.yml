@@ -1,0 +1,35 @@
+# Deploy Cloudflare Worker on push to worker/ directory
+name: Deploy Worker
+
+on:
+  push:
+    branches: [TESUPL0001]
+    paths:
+      - 'worker/**'
+      - 'wrangler.jsonc'
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: worker
+          command: deploy
+          # Secrets are set out-of-band via:
+          #   wrangler secret put GITHUB_PAT --name tesla-image-uploader-api
+          #   wrangler secret put GITHUB_UPLOAD_PAT --name tesla-image-uploader-api
+          # They are NOT in Terraform state or this workflow.

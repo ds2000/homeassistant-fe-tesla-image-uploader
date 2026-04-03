@@ -1,0 +1,11 @@
+# Copy to terraform.tfvars and fill in values.
+# terraform.tfvars is gitignored — never commit secrets.
+
+cloudflare_api_token  = ""
+cloudflare_account_id = ""
+
+# Defaults (override if needed):
+# pages_project_name = "homeassistant-fe-tesla-image-uploader"
+# worker_name        = "tesla-image-uploader-api"
+# github_repo        = "ds2000/homeassistant-fe-tesla-image-uploader"
+# production_branch  = "TESUPL0001"
