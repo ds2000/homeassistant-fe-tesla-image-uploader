@@ -17,22 +17,19 @@ resource "cloudflare_workers_script" "api" {
   content     = file("${path.module}/../worker/index.js")
   main_module = "index.js"
 
-  compatibility_date  = "2024-01-01"
+  compatibility_date = "2024-01-01"
 
   bindings = [
     {
-      type          = "kv_namespace"
-      name          = "RATE_LIMIT"
-      namespace_id  = cloudflare_workers_kv_namespace.rate_limit.id
+      type         = "kv_namespace"
+      name         = "RATE_LIMIT"
+      namespace_id = cloudflare_workers_kv_namespace.rate_limit.id
     },
   ]
 }
 
-# Worker subdomain route (*.workers.dev)
-resource "cloudflare_workers_subdomain" "api" {
-  account_id = var.cloudflare_account_id
-  subdomain  = "david-c22"
-}
+# Worker subdomain (david-c22.workers.dev) is pre-existing
+# and not managed by Terraform — it's account-level config.
 
 # ── Pages project ────────────────────────────────────────────
 resource "cloudflare_pages_project" "site" {

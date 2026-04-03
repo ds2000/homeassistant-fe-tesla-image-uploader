@@ -1,3 +1,7 @@
 name = "tesla-image-uploader-api"
 main = "index.js"
 compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT"
+id = "41f61e4b1abe4e5fbd465ad8d7478e25"
