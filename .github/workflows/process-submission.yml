@@ -218,7 +218,7 @@ jobs:
             FAILED_FILES=$(jq -r '.files[] | select(.error != null) | "- **\(.file)**: \(.error)"' validation_report.json 2>/dev/null || echo "")
           fi
 
-          REVIEW_URL="https://homeassistant-fe-tesla-image-uploader.pages.dev/review.html?branch=${HEAD_REF}"
+          REVIEW_URL="https://homeassistant-fe-tesla-image-uploader.pages.dev/review?branch=${HEAD_REF}"
 
           RAW_BASE="https://raw.githubusercontent.com/ds2000/homeassistant-fe-tesla-image-uploader/${HEAD_REF}"
 
