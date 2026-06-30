@@ -1,4 +1,13 @@
 {
+  "name": "homeassistant-fe-tesla-image-uploader",
+  "version": "0.3.0",
+  "description": "Image upload + verification page for the Home Assistant Tesla card.",
+  "author": "David Shaw (ds2000)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ds2000/homeassistant-fe-tesla-image-uploader.git"
+  },
   "dependencies": {
     "wrangler": "^4.70.0"
   }
