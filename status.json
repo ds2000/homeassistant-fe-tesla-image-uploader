@@ -63,5 +63,9 @@
   "Y/Y.1/solid_black": {
     "status": "pending",
     "pr": 42
+  },
+  "Y/Y.2/midnight_cherry_red": {
+    "status": "pending",
+    "pr": 43
   }
 }
