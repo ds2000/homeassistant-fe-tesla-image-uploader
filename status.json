@@ -71,5 +71,9 @@
   "X/X.1/solid_black": {
     "status": "pending",
     "pr": 44
+  },
+  "3/3.2/quicksilver": {
+    "status": "pending",
+    "pr": 45
   }
 }
